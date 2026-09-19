@@ -166,11 +166,53 @@ not just assertion. This file tracks exactly what's left to get there.
       attack categories, with real vs. illustrative provenance kept
       honest via directory structure, not blurred together. Verified:
       13 passed, 10 xfailed - all correctly wired.
-- [ ] Re-evaluate module coverage against attack *dimensions* (the
+- [x] Re-evaluate module coverage against attack *dimensions* (the
       AgentTrap taxonomy: exfil, destructive, injection, backdoor,
       resource-abuse, jailbreak, hidden-content, tracking, patch-inject,
       poisoning, collusion, homoglyph, typosquat, proxy/oauth, IAM) not
-      just against one campaign's specific patterns
+      just against one campaign's specific patterns - full audit below.
+
+      **Strong coverage** (multiple modules each): data exfiltration
+      (credentials/files/wallets/identity-memory), code/command
+      execution injection (shell/eval/exec/bytecode), obfuscation/
+      evasion (base64/whitespace/unicode-steg/string-concat), prompt
+      injection & instruction manipulation (hidden + overt), archive/
+      file-structure evasion.
+
+      **Moderate coverage**: social engineering (fake-prerequisite,
+      name hijacking, safety-bypass) - real but narrow, each rule
+      targets one specific real-world shape rather than the category
+      broadly. Persistence/backdoor (dropper, chmod) - catches blatant
+      cases, but the real SRC013 "bootstrap wrapper" sample (in
+      known_misses/real_world/) shows subtle, jargon-disguised
+      persistence is not reliably caught.
+
+      **Real gaps, zero dedicated coverage**: output/integrity
+      manipulation (silently altering code correctness - see
+      known_misses/output_manipulation.md); resource/availability
+      abuse (unbounded recursion/token bombs - see
+      known_misses/resource_abuse.md); document-embedded steganography
+      (hidden worksheets/white text in delivered files - see
+      known_misses/real_world/src001_hidden_worksheet_steganography.md,
+      found this session); package/dependency typosquatting (distinct
+      from the skill-*name* hijacking module 19 already covers);
+      IAM/OAuth-specific privilege escalation beyond AWS-credential-file
+      and wallet-extension access already covered.
+
+      **Partial coverage**: non-Python native code (Rust/Go/Ruby files
+      are scanned for the same generic patterns - curl|bash, bare-IP,
+      secrecy language - but have no language-specific dangerous-call
+      detection the way Python does; PowerShell is the one exception,
+      with real coverage added this session).
+
+      **Structurally undetectable by any static (or even LLM) read**,
+      documented honestly rather than chased further: Self-Mutating
+      Poisoning (SRC009) and dynamically-generated payloads (SRC006) -
+      both confirmed via real samples and the underlying published
+      research (see BENCHMARK.md).
+
+      This audit is the map for future module work - a real gap list
+      to work from, not a vague sense of "probably missing some stuff."
 - [ ] Basic sandboxed dynamic analysis (catches logic-bomb/delayed-
       activation attacks no read-time review, static or LLM, can see)
 - [ ] Multi-platform skill format support (Claude Code skill.json,
