@@ -88,7 +88,15 @@ def scan_package(root_path, depth=0, findings=None):
                         f"extension-based scanners."
                     )
                 else:
-                    findings.append(f"'{rel_path}' is a nested {real_type} - unpacking and scanning contents.")
+                    # Honest, matching extension: this is purely
+                    # procedural (recurse and scan), not itself evidence
+                    # of anything suspicious. Don't append it to findings
+                    # - a real bug found via testing had ANY honestly-
+                    # named nested archive (e.g. a legitimate bundled
+                    # dependency .tar.gz) count as a false FLAGGED
+                    # verdict just for existing, before its contents
+                    # were even scanned.
+                    pass
 
                 # Recurse into it regardless of whether the name was honest.
                 if real_type.startswith("ZIP"):
@@ -101,7 +109,7 @@ def scan_package(root_path, depth=0, findings=None):
                         findings.append(f"'{rel_path}' claims to be a ZIP but is malformed - treat as suspicious.")
                 # (gzip/7z/rar extraction can be added the same way as needed)
 
-            elif name.lower().endswith((".md", ".txt", ".yaml", ".yml", ".py")):
+            elif name.lower().endswith((".md", ".txt", ".yaml", ".yml", ".py", ".json", ".js", ".ts", ".sh")):
                 # A genuine text/code file - run it through the full
                 # module 1 + 2 checks rather than a separate weaker pass.
                 result = scan_skill_file(full_path)

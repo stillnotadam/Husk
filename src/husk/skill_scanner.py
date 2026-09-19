@@ -54,10 +54,10 @@ SUSPICIOUS_WHITESPACE_RUN = 50  # consecutive blank lines
 # and readable on purpose; this is a starting rule set to expand later.
 DANGEROUS_PATTERNS = [
     (r"\bcurl\s+.*\|\s*(sh|bash)\b", "Pipes a downloaded script directly into a shell"),
-    (r"\bexec\s*\(", "Uses exec() - runs code built at runtime"),
-    (r"\beval\s*\(", "Uses eval() - runs code built at runtime"),
+    (r"(?<!\.)\bexec\s*\(", "Uses exec() - runs code built at runtime"),
+    (r"(?<!\.)\beval\s*\(", "Uses eval() - runs code built at runtime"),
     (r"base64\s+-d", "Decodes base64 - common way to hide a payload"),
-    (r"\brm\s+-rf\s+/", "Destructive filesystem command"),
+    (r"\brm\s+-rf\s+/(\s|['\"]|$)", "Destructive filesystem command targeting the root directory"),
     (r"os\.system\s*\(", "Direct shell command execution"),
 ]
 
@@ -158,7 +158,8 @@ BYTECODE_PATTERNS_NEEDS_CONTEXT = [
 NEGATION_PHRASES = [
     "must not", "do not", "don't", "should not", "shouldn't",
     "avoid", "never", "without", "no eval", "no exec", "not allowed",
-    "forbidden", "prohibited", "disallow",
+    "forbidden", "prohibited", "disallow", "did not", "didn't",
+    "was not", "wasn't", "is not", "isn't", "does not", "doesn't",
 ]
 
 
@@ -247,7 +248,7 @@ def find_split_base64(text):
 
     fragments = []
     for match in re.finditer(r"[A-Za-z0-9+/]{%d,%d}={0,2}" % (MIN_FRAGMENT_LEN, MIN_SUSPICIOUS_B64_LENGTH - 1), text):
-        if _is_part_of_url(text, match.start()) or _looks_like_path_not_base64(match.group(0)):
+        if _is_part_of_url(text, match.start()) or _looks_like_path_not_base64(match.group(0)) or _looks_like_identifier_not_base64(match.group(0)):
             continue
         line_num = text[:match.start()].count("\n") + 1
         fragments.append((line_num, match.group(0)))
@@ -321,6 +322,22 @@ def _looks_like_path_not_base64(candidate):
     return (word_like / len(segments)) > 0.6
 
 
+def _looks_like_identifier_not_base64(candidate):
+    """
+    True if the candidate is a long identifier name (e.g. CamelCase API
+    type names in generated docs), not base64. Real base64-encoded data
+    has roughly a 1-in-6 chance per character of being a digit; a long
+    run of pure letters is essentially never real base64 of meaningful
+    length. Found via real-world testing: Go API type names like
+    'BetaManagedAgentsModelConfigParamsTypeModelConfig' matched the
+    base64 character class by coincidence (letters + occasional
+    trailing digits from versioning), with far too few digits overall
+    to plausibly be encoded data.
+    """
+    digit_count = sum(1 for c in candidate if c.isdigit())
+    return (digit_count / max(len(candidate), 1)) < 0.05
+
+
 def find_suspicious_base64(text):
     """
     Finds long base64-looking blobs, attempts to decode them, and
@@ -333,7 +350,7 @@ def find_suspicious_base64(text):
 
     for match in candidates:
         blob = match.group(0)
-        if _is_part_of_url(text, match.start()) or _looks_like_path_not_base64(blob):
+        if _is_part_of_url(text, match.start()) or _looks_like_path_not_base64(blob) or _looks_like_identifier_not_base64(blob):
             continue
         line_num = text[:match.start()].count("\n") + 1
         findings.append(
@@ -434,9 +451,16 @@ def find_hidden_instructions(text):
                     f"documented hidden-instruction attack even though it doesn't "
                     f"match a known exact phrase: '{comment_body.strip()[:120]}'"
                 )
-            elif len(comment_body.strip()) > 80:
+            elif len(comment_body.strip()) > 80 and not re.search(
+                r"SPDX|Copyright|Licensed under|Permission is hereby granted|"
+                r"MIT License|Apache License|GNU General Public License",
+                comment_body, re.IGNORECASE
+            ):
                 # Even without a matched phrase, a long hidden comment in a
-                # skill file is unusual enough to be worth a softer flag.
+                # skill file is unusual enough to be worth a softer flag -
+                # unless it's clearly a standard license/copyright header,
+                # which is common, benign, and was a real false positive
+                # found via testing (NVIDIA/Apache SPDX headers).
                 findings.append(
                     f"Line {line_num}: unusually long hidden comment "
                     f"({len(comment_body.strip())} chars) - worth a manual look, "
@@ -521,27 +545,46 @@ def find_exfiltration_chain(text):
     registries): a specific three-step sequence - read a file, encode
     it, send it over the network. Each step is individually mundane;
     the chain of all three together is the signal.
+
+    PRECISION FIX: an earlier version flagged if all three signal types
+    existed ANYWHERE in the file, with no connection between them. A
+    real false positive found via testing: a long reference doc about
+    video buffer APIs happened to mention a read()-like call, a base64
+    encode elsewhere (for an unrelated purpose), and a network call
+    elsewhere still - three unrelated mentions in a long document, not
+    a real chain. Now requires the three signals to appear within a
+    reasonably tight window of each other (same rough function/section),
+    not just co-present anywhere in a potentially long file.
     """
     findings = []
+    WINDOW = 500
 
     READ_PATTERN = r"(\.read\s*\(\)|read_text\s*\(\)|open\s*\([^)]*\)\s*\.read)"
     ENCODE_PATTERN = r"base64\.(b64encode|encode)\s*\("
     SEND_PATTERN = r"(requests\.(post|put)\s*\(|urllib\.request\.urlopen\s*\(|\.send\s*\(|fetch\s*\()"
 
-    has_read = re.search(READ_PATTERN, text, re.IGNORECASE)
-    has_encode = re.search(ENCODE_PATTERN, text, re.IGNORECASE)
-    has_send = re.search(SEND_PATTERN, text, re.IGNORECASE)
+    read_matches = list(re.finditer(READ_PATTERN, text, re.IGNORECASE))
+    encode_matches = list(re.finditer(ENCODE_PATTERN, text, re.IGNORECASE))
+    send_matches = list(re.finditer(SEND_PATTERN, text, re.IGNORECASE))
 
-    if has_read and has_encode and has_send:
-        read_line = text[:has_read.start()].count("\n") + 1
-        encode_line = text[:has_encode.start()].count("\n") + 1
-        send_line = text[:has_send.start()].count("\n") + 1
-        findings.append(
-            f"Exfiltration chain detected: file read (line {read_line}) -> "
-            f"base64 encode (line {encode_line}) -> network send (line {send_line}). "
-            f"This exact three-step sequence is a documented real-world "
-            f"pattern for quietly moving data out of a system."
-        )
+    for r in read_matches:
+        for e in encode_matches:
+            if abs(e.start() - r.start()) > WINDOW:
+                continue
+            for s in send_matches:
+                if abs(s.start() - e.start()) > WINDOW:
+                    continue
+                read_line = text[:r.start()].count("\n") + 1
+                encode_line = text[:e.start()].count("\n") + 1
+                send_line = text[:s.start()].count("\n") + 1
+                findings.append(
+                    f"Exfiltration chain detected: file read (line {read_line}) -> "
+                    f"base64 encode (line {encode_line}) -> network send (line {send_line}), "
+                    f"all within a close window of each other. This exact "
+                    f"three-step sequence is a documented real-world "
+                    f"pattern for quietly moving data out of a system."
+                )
+                return findings  # one clear finding is enough, avoid duplicate spam
 
     return findings
 
@@ -574,7 +617,7 @@ def find_fake_prerequisite_socialengineering(text):
     PASTE_SITE_PATTERN = r"(glot\.io|rentry\.co|pastebin\.com|paste\.ee|hastebin\.com|paste\.sh)"
     TERMINAL_ACTION_PATTERN = r"(terminal|copy.{0,20}(script|command)|paste it)"
 
-    PASSWORD_ARCHIVE_PATTERN = r"(pass(?:word)?[:\s]+[`'\"]?\w+[`'\"]?).{0,30}(extract|unzip)|((extract|unzip).{0,30}pass(?:word)?[:\s]+[`'\"]?\w+)"
+    PASSWORD_ARCHIVE_PATTERN = r"((?:password|pass\s*:)[:\s]+[`'\"]?\w+[`'\"]?).{0,30}(extract|unzip)|((extract|unzip).{0,30}(?:password|pass\s*:)[:\s]+[`'\"]?\w+)"
 
     REQUIRE_FRAMING_PATTERN = r"(requires? (?:the )?[\w\-]+ (?:utility|agent|cli|tool) to function|without [\w\-]+ installed[^.]{0,40}(?:will not work|won.t work|will not function))"
     EXE_DOWNLOAD_LINK_PATTERN = r"\[.*?\]\(https?://[^\)]+\.(zip|exe)\)"
@@ -697,13 +740,20 @@ def find_overt_secrecy_language(text):
         for match in re.finditer(re.escape(phrase), text, re.IGNORECASE):
             if _is_negated(text, match.start()):
                 continue
-            # Tight window (not a full paragraph - markdown tables and
-            # long sections have no blank lines between rows, so a
-            # paragraph-sized window pulled in unrelated words from far
-            # away and caused real false positives, found via testing).
-            window_start = max(0, match.start() - 200)
-            window_end = min(len(text), match.end() + 200)
-            window = text[window_start:window_end].lower()
+            # Same line only (not a character window): markdown tables
+            # put each row on one line with no blank lines between rows,
+            # so any window wider than "this line" risks pulling in an
+            # unrelated word from a different row/cell - found via a
+            # real false positive where "silently" in one table row
+            # combined with "send" from a different row. This is a
+            # small, honest recall tradeoff (a real attack sentence
+            # hard-wrapped across two lines could be missed) in exchange
+            # for not flagging ordinary documentation constantly.
+            line_start = text.rfind("\n", 0, match.start())
+            line_start = line_start + 1 if line_start != -1 else 0
+            line_end = text.find("\n", match.end())
+            line_end = line_end if line_end != -1 else len(text)
+            window = text[line_start:line_end].lower()
 
             # Word-boundaried action match - "post" as a bare substring
             # matched inside "re-post" and "postgresql", a real false-
