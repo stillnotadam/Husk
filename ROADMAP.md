@@ -382,13 +382,34 @@ sequencing below are about doing it right, not about avoiding it.
 ### C. Competitor benchmarking - real, viable competitors only
 - [x] SkillScan - decisive win, clean data
 - [x] agent-audit-kit - nuanced, honest precision/recall tradeoff
-- [ ] skillscan-security - retry properly (their real research tool;
-      blocked tonight by this environment's network access, not by
-      the tool itself - worth a real second attempt with a workaround)
-- [ ] Find 1-2 more real, viable competitors beyond what's been tried
-      (skip ones already shown to be a scope mismatch or environmentally
-      blocked for good reason - target ones with a real chance of
-      teaching us something)
+- [x] skillscan-security - retried properly, as planned. Found the real,
+      precise root cause this time: NOT primarily an environmental
+      network restriction (the actual host, raw.githubusercontent.com,
+      IS reachable here). Their published PyPI package (v0.7.0)
+      requests a specific rule file, exfil_channels.yaml, that returns
+      a genuine 404 - confirmed by cloning their actual GitHub repo
+      directly, where that file no longer exists at all (apparently
+      consolidated into their now-18,900-line default.yaml). Manually
+      correcting the local rule cache to work around this surfaced a
+      SECOND, independent bug: a separate "intel" sync mechanism with
+      its own schema mismatch. Two distinct, real, reproducible bugs
+      in the current release - not something reasonably patchable from
+      outside the project. No real number obtainable, but the finding
+      is now precise and honest rather than the earlier, less accurate
+      "environmental limitation" framing.
+- [x] Find 1-2 more real, viable competitors beyond what's been tried -
+      found and tested `agent-audit` (github.com/HeadyZhang/agent-audit,
+      211 stars, MIT, real published benchmark methodology, own
+      reported validation against 18,899 real ClawHub skills).
+      Installed cleanly, fully offline, no auth wall. Tested against
+      the exact same real data as every other benchmark: Husk wins
+      cleanly on BOTH recall and precision, at BOTH of agent-audit's
+      severity thresholds (Husk 57.3%/2.0% vs. their 46.7%/7.2% loose
+      and 33.3%/3.2% strict). A clean win, not just a tradeoff - see
+      BENCHMARK.md "Benchmark 4" for the full honest writeup, including
+      the fair caveat that agent-audit is a broader tool in some
+      respects (general agent-code/MCP-config auditing, not just
+      skill-content analysis).
 - [ ] Snyk: access remains blocked; revisit only if a free/trial path
       surfaces (see the earlier email-outreach suggestion)
 
