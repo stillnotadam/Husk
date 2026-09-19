@@ -26,7 +26,7 @@ import sys
 
 # Import the module-1 and module-2 checks so archive contents get the
 # full treatment, not a separate weaker pass.
-from skill_scanner import scan_skill_file
+from .skill_scanner import scan_skill_file
 
 # Magic bytes for common archive formats, independent of file extension.
 ARCHIVE_SIGNATURES = {

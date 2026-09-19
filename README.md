@@ -1,5 +1,7 @@
 # Husk
 
+[![Tests](https://github.com/YOUR-USERNAME/husk/actions/workflows/tests.yml/badge.svg)](https://github.com/YOUR-USERNAME/husk/actions/workflows/tests.yml)
+
 A static security scanner for AI agent skill packages - built to specifically defend against bypass techniques that were shown, in published 2026 security research, to defeat production scanners from Snyk, Cisco, and Vercel's skills.sh.
 
 ## Why this exists
@@ -33,18 +35,35 @@ Husk does not use machine learning or an LLM to decide whether something is safe
 
 This is a first version. It has been adversarially self-tested - evasion variants were built specifically to try to defeat each check, two real gaps were found in that process (Unicode whitespace padding, and base64 payloads split across multiple short fragments), and both were fixed and re-verified. That process is ongoing; no static scanner is ever a finished, unbeatable thing, and Husk does not claim to be one.
 
+## Install
+
+```bash
+pip install git+https://github.com/YOUR-USERNAME/husk.git
+```
+
+Or, for development (editable install, includes the test suite):
+
+```bash
+git clone https://github.com/YOUR-USERNAME/husk.git
+cd husk
+pip install -e ".[dev]"
+python3 -m pytest tests/test_scanner.py -v   # 13 passed, 2 xfailed (see below)
+```
+
 ## Usage
 
 ```bash
-# Scan a single pickle-based model file
-python3 scanner.py path/to/model.pkl
-
 # Scan a single skill file
-python3 skill_scanner.py path/to/SKILL.md
+husk skill path/to/SKILL.md
 
-# Scan an entire skill package (handles nested/disguised archives)
-python3 package_scanner.py path/to/skill_package/
+# Scan a whole skill package (handles nested/disguised archives)
+husk package path/to/skill_package/
+
+# Scan a pickle-based model file
+husk model path/to/model.pkl
 ```
+
+Exit code is `0` for SAFE, `1` for FLAGGED - safe to use directly in CI.
 
 ## What v1 does NOT do yet
 
