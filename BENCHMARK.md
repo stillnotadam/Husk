@@ -64,13 +64,54 @@ What we *can* and *have* verified, independently of Snyk entirely:
   positives from two large real skill repositories
 - Husk: 13/13 self-built adversarial evasion tests correctly caught
 
-## Reproducing this
+## Update: attempted real authenticated comparison
+
+We didn't stop at the token-free finding above - we tried to go further and
+get a true, fully authenticated, apples-to-apples detection comparison.
+
+Two separate real Snyk API tokens were tried against the live analysis
+endpoint (`api.snyk.io/hidden/mcp-scan/cli/analysis-machine`), including one
+in the standard personal-API-token UUID format described in Snyk's own
+docs. Both attempts returned the same result:
+
+```
+[X007 info]: The analysis server returned an error for your request:
+403 - Forbidden
+aiohttp.client_exceptions.ClientResponseError: 403, message='Forbidden'
+```
+
+This means the barrier isn't just "you need to sign up" - it's deeper.
+Even with what should be valid authentication, the real analysis engine
+refuses access. This suggests Agent Scan's actual detection capability
+requires a specific plan, org entitlement, or product access beyond what a
+bare free-tier signup grants, despite the README's "Quick Start" implying
+otherwise.
+
+**Practical conclusion**: a fully authenticated, apples-to-apples
+detection-accuracy comparison between Snyk's real cloud engine and Husk
+was attempted in good faith and is, as of this writing, not obtainable
+without deeper access to Snyk's platform than a standard free account
+provides. This is reported honestly rather than glossed over - see the
+"What this benchmark does NOT claim" section above, which still holds.
 
 ```bash
 git clone https://github.com/snyk/agent-scan.git
 python3 -m venv venv && source venv/bin/activate
 pip install -e agent-scan
 snyk-agent-scan path/to/any/SKILL.md   # will ask for SNYK_TOKEN
+
+python3 skill_scanner.py path/to/any/SKILL.md   # Husk - works immediately
+```
+
+## Reproducing this
+
+```bash
+git clone https://github.com/snyk/agent-scan.git
+python3 -m venv venv && source venv/bin/activate
+pip install -e agent-scan
+snyk-agent-scan path/to/any/SKILL.md   # will ask for SNYK_TOKEN; a real
+                                         # token still returns 403 on the
+                                         # analysis endpoint as of testing
 
 python3 skill_scanner.py path/to/any/SKILL.md   # Husk - works immediately
 ```

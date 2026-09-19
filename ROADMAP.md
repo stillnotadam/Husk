@@ -49,9 +49,14 @@ not just assertion. This file tracks exactly what's left to get there.
       Full writeup in BENCHMARK.md, including an honest limitation: we
       don't have a paid Snyk token, so raw detection-accuracy comparison
       (their real engine vs. Husk) isn't possible yet - that's flagged
-      explicitly rather than glossed over. What IS fully verified
-      independently: Husk's own real-world numbers (8/8 real malicious
-      caught, 248/249 real legitimate clean).
+      explicitly rather than glossed over. Attempted to close this gap:
+      tried two real Snyk API tokens (including standard UUID
+      personal-token format) against the live analysis endpoint; both
+      returned 403 Forbidden. Real detection access appears gated
+      beyond a bare free signup, despite Quick Start docs implying
+      otherwise - itself a legitimate, reported finding. What IS fully
+      verified independently: Husk's own real-world numbers (8/8 real
+      malicious caught, 248/249 real legitimate clean).
 
 ## Status log
 
