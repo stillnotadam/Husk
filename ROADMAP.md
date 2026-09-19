@@ -433,3 +433,35 @@ sequencing below are about doing it right, not about avoiding it.
       to structurally fail (the SMP/dynamically-generated-payload class
       documented in BENCHMARK.md) to see what, if anything, becomes
       newly detectable
+
+## Real, honest safety incident: filesystem isolation attempt abandoned
+
+2026-09-20: Attempted to close the sandbox's last real gap (filesystem
+isolation) using the standard technique - unshare --mount,
+mount --make-rprivate / to break propagation, then remount,ro on /
+with the working directory bind-mounted back as writable. Tested this
+directly, carefully, checking host state after every step.
+
+It leaked outside the namespace and made the ACTUAL HOST FILESYSTEM
+read-only - twice, including once with the standard safety precaution
+(make-rprivate) applied, which should have prevented exactly this.
+Both times caught immediately via an explicit host-state check
+built into the test process, and reverted with mount -o remount,rw /
+- confirmed fully fixed both times, no data loss.
+
+Decision: this specific technique is NOT implemented in sandbox.py.
+Two repeated failures, including one with the standard safety step
+applied, is a signal of real environment-specific danger (this
+environment's kernel version string suggests it may itself be an
+already-virtualized/nested sandbox with non-standard mount behavior),
+not bad luck worth retrying a third time against the real filesystem.
+Documented honestly in sandbox.py's docstring and README.md rather
+than hidden or quietly dropped. Network and PID isolation (the
+previous session's real upgrade) remain fully intact and unaffected -
+only the filesystem-isolation attempt was rolled back.
+
+A real, safe path to filesystem isolation exists (proper container
+tooling - Docker, gVisor - with well-tested isolation guarantees,
+rather than a manual mount-namespace technique whose safety depends on
+host-specific assumptions) but is out of scope for what can be safely
+built and tested directly in this environment.

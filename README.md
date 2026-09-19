@@ -84,9 +84,14 @@ isolation via `unshare --net` - a real network namespace with no route
 out at all, verified directly by an automated test, not assumed), with
 an honest fallback to relying on the host's own network restrictions
 when namespace isolation isn't available (every result reports which
-mode actually ran). PID isolation is also real. **Filesystem isolation
-is not yet real** - the script can still read the host's actual
-filesystem via absolute paths; this remains open. Observation is
+mode actually ran). PID isolation is also real. **Filesystem isolation is not yet real, and a real attempt to add it
+was deliberately abandoned for safety** - see `src/husk/sandbox.py`'s
+docstring for the full, honest account of why (a standard technique
+was tested directly and, twice, leaked outside its namespace and made
+the actual host filesystem read-only, even with the standard safety
+precaution applied - caught and reverted both times with no data loss,
+but confirmed as a real, environment-specific danger, not a
+theoretical one). Observation is
 limited to exit code, stdout/stderr, and a filesystem diff - no deep
 syscall tracing. Only Python scripts are sandboxed. A clean run means
 nothing bad happened *this time*, under *these* inputs - not a

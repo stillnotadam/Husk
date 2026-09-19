@@ -35,14 +35,21 @@ not full production-grade OS-level isolation like Docker/gVisor/Firecracker:
 - **PID isolation is also real**: `unshare --pid --fork` gives the
   script its own process-ID namespace - it cannot see or signal any
   process outside it.
-- **Filesystem isolation is still NOT real.** `unshare --mount` gives a
-  private mount namespace (mount/unmount operations inside don't leak
-  to the host), but without an additional chroot/pivot_root to a
-  minimal root filesystem, the script can still READ the actual host
-  filesystem it's running on. A script using an absolute path can see
-  and potentially modify files outside the temp working directory. This
-  remains a real, honest gap - a genuine chroot-based upgrade is a
-  reasonable next step, not yet built.
+- **Filesystem isolation is still NOT real, and a real attempt to add it
+  was deliberately abandoned for safety reasons** - not just unbuilt.
+  The standard technique (a new mount namespace, `mount --make-rprivate`
+  to break propagation, then `remount,ro` on `/` with the working
+  directory bind-mounted back as writable) was tested directly and,
+  twice, leaked outside the namespace and made the actual host
+  filesystem read-only - even with the standard safety precaution
+  applied. This was caught and reverted both times with no data loss,
+  but it demonstrated real, repeatable, environment-specific danger
+  rather than a theoretical risk. This specific technique is NOT
+  implemented in this codebase as a result. A real, safe version of
+  filesystem isolation would need proper container tooling (Docker,
+  gVisor) with its own well-tested isolation guarantees, rather than a
+  manual mount-namespace technique whose safety depends on assumptions
+  about the host's mount configuration that don't hold everywhere.
 - CPU time, memory, and process-count limits are enforced via Python's
   `resource` module (kernel-tracked `setrlimit`, real and independent
   of the namespace isolation above).
