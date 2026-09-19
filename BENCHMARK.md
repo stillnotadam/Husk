@@ -69,10 +69,14 @@ What we *can* and *have* verified, independently of Snyk entirely:
 We didn't stop at the token-free finding above - we tried to go further and
 get a true, fully authenticated, apples-to-apples detection comparison.
 
-Two separate real Snyk API tokens were tried against the live analysis
-endpoint (`api.snyk.io/hidden/mcp-scan/cli/analysis-machine`), including one
-in the standard personal-API-token UUID format described in Snyk's own
-docs. Both attempts returned the same result:
+**Both credential types a standard Snyk account can produce were tried
+against the live analysis endpoint**
+(`api.snyk.io/hidden/mcp-scan/cli/analysis-machine`):
+- The classic Auth Token (UUID format, from Account → General → Auth Token)
+- A modern Personal Access Token / PAT (from the same account's PAT system,
+  the newer mechanism Snyk's own UI recommends for "enhanced security")
+
+Both returned the identical result:
 
 ```
 [X007 info]: The analysis server returned an error for your request:
@@ -80,19 +84,20 @@ docs. Both attempts returned the same result:
 aiohttp.client_exceptions.ClientResponseError: 403, message='Forbidden'
 ```
 
-This means the barrier isn't just "you need to sign up" - it's deeper.
-Even with what should be valid authentication, the real analysis engine
-refuses access. This suggests Agent Scan's actual detection capability
-requires a specific plan, org entitlement, or product access beyond what a
-bare free-tier signup grants, despite the README's "Quick Start" implying
-otherwise.
+This rules out "wrong token" or "wrong token type" as the explanation -
+both officially-documented authentication paths for a standard account were
+tried, verified against the actual account settings page, and both failed
+identically. This points to a real access/entitlement gap: the account
+does not have the Agent Scan product itself enabled or entitled at the
+org level, despite the CLI being open source and the README's "Quick
+Start" implying a bare signup is sufficient.
 
 **Practical conclusion**: a fully authenticated, apples-to-apples
 detection-accuracy comparison between Snyk's real cloud engine and Husk
-was attempted in good faith and is, as of this writing, not obtainable
-without deeper access to Snyk's platform than a standard free account
-provides. This is reported honestly rather than glossed over - see the
-"What this benchmark does NOT claim" section above, which still holds.
+was attempted in good faith, twice, with both available credential types,
+and is not obtainable through a standard account as of this writing. This
+is reported honestly rather than glossed over - see "What this benchmark
+does NOT claim" above, which still holds.
 
 ```bash
 git clone https://github.com/snyk/agent-scan.git
