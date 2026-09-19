@@ -1105,6 +1105,100 @@ def find_safety_bypass_instruction(text):
     return findings
 
 
+def find_unicode_steganography(text):
+    """
+    Module 18: Unicode steganography detection.
+
+    Technique inspiration: agent-audit-kit's AAK-SKILL-002 rule (their
+    source read directly as part of this project's competitor research
+    - see ROADMAP.md Tier 3.D). A category Husk's own invisible-
+    character check (module 1, used for whitespace-padding detection)
+    doesn't cover: bidirectional-override characters and Unicode "tag"
+    characters that make text RENDER differently than it PARSES.
+
+    Bidi overrides (U+202A-U+202E, U+2066-U+2069) can visually reverse
+    or reorder text so a human reading the rendered file sees something
+    different from the actual character sequence an agent parses -
+    e.g. hiding a dangerous command inside what looks like an innocuous
+    word. Unicode "tag" characters (U+E0000-U+E007F) are invisible in
+    virtually all renderers and have been used to smuggle hidden ASCII
+    payloads inside seemingly normal text.
+
+    Neither has any legitimate reason to appear in a skill file.
+    """
+    findings = []
+    BIDI_OVERRIDE_RANGES = [
+        (0x202A, 0x202E),  # LRE, RLE, PDF, LRO, RLO
+        (0x2066, 0x2069),  # LRI, RLI, FSI, PDI
+    ]
+    TAG_UNICODE_RANGE = (0xE0000, 0xE007F)
+
+    for i, ch in enumerate(text):
+        code = ord(ch)
+        is_bidi = any(lo <= code <= hi for lo, hi in BIDI_OVERRIDE_RANGES)
+        is_tag = TAG_UNICODE_RANGE[0] <= code <= TAG_UNICODE_RANGE[1]
+        if is_bidi or is_tag:
+            line_num = text[:i].count("\n") + 1
+            kind = "bidirectional-override" if is_bidi else "Unicode tag"
+            findings.append(
+                f"Line {line_num}: contains a {kind} character "
+                f"(U+{code:04X}) - this class of character makes text "
+                f"render differently than it parses, or is invisible in "
+                f"virtually all renderers. There is no legitimate reason "
+                f"for a skill file to contain one."
+            )
+            # One report per category is enough signal; avoid spamming
+            # a finding for every single occurrence in a longer run.
+            if len(findings) >= 3:
+                break
+
+    return findings
+
+
+def find_trusted_name_hijacking(text, existing_findings):
+    """
+    Module 19: trusted-name hijacking.
+
+    Technique inspiration: agent-audit-kit's AAK-SKILL-004 rule (its
+    source was read directly as part of this project's competitor
+    research - see ROADMAP.md Tier 3.D): a skill's declared name mimics
+    a well-known, widely-trusted skill (pdf, docx, pptx, xlsx,
+    frontend-design, etc.) while its actual body does something
+    unrelated or hostile - trading on the trust a familiar name earns.
+
+    PRECISION SCOPING: matching a common name alone is nowhere near
+    enough signal on its own - plenty of legitimate skills are
+    reasonably named 'pdf-tools' or similar. This only adds a finding
+    when the file ALSO already triggered at least one other real
+    finding from every other check in this scanner - i.e. it never
+    fires alone, only as an aggravating note on top of independently-
+    justified suspicion, which keeps false-positive risk essentially
+    at zero while still surfacing the pattern when it's genuinely
+    relevant.
+    """
+    if not existing_findings:
+        return []
+
+    TRUSTED_NAMES = [
+        "pdf", "docx", "pptx", "xlsx", "frontend-design", "skill-creator",
+        "webapp-testing", "mcp-builder", "brand-guidelines",
+    ]
+    name_match = re.search(r'^name:\s*["\']?([\w-]+)', text, re.MULTILINE)
+    if not name_match:
+        return []
+    declared_name = name_match.group(1).lower()
+
+    if declared_name in TRUSTED_NAMES:
+        return [
+            f"Additionally: this skill's declared name ('{declared_name}') "
+            f"matches a well-known, widely-trusted skill name, while the "
+            f"file also independently triggered other findings above - "
+            f"trading on a familiar name while behaving unexpectedly is a "
+            f"documented impersonation pattern (name hijacking)."
+        ]
+    return []
+
+
 def scan_skill_file(path):
     try:
         with open(path, "r", encoding="utf-8", errors="replace") as f:
@@ -1187,6 +1281,14 @@ def scan_skill_file(path):
 
     # Check 19: safety-confirmation bypass instructions
     findings.extend(find_safety_bypass_instruction(text))
+
+    # Check 20: Unicode steganography (bidi-override, tag characters)
+    findings.extend(find_unicode_steganography(text))
+
+    # Check 21: trusted-name hijacking (only fires as an aggravating
+    # factor when something ELSE has already been flagged - see
+    # find_trusted_name_hijacking's docstring for why it's scoped this way)
+    findings.extend(find_trusted_name_hijacking(text, findings))
 
     if findings:
         return {"verdict": "FLAGGED", "findings": findings}
