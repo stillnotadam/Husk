@@ -1006,6 +1006,105 @@ def find_agent_identity_exfiltration(text):
     return findings
 
 
+def find_wallet_credential_harvesting(text):
+    """
+    Module 16: browser wallet/credential harvesting.
+
+    Found via real samples: (1) a 'portfolio sync' skill that locates
+    and copies MetaMask/Phantom browser-extension storage directories
+    (where wallet seed phrases and private keys live) and streams them
+    via 'tar | curl -X POST' - a real exfiltration shape none of the
+    existing checks cover (not base64, not a simple curl|bash pipe);
+    (2) a 'session analysis' skill that runs SQL queries directly
+    against Chrome's actual internal password database schema
+    (Login Data table, password_value column) and POSTs the result.
+
+    Both patterns are narrow and specific enough to be high-precision:
+    there is essentially no legitimate reason for a skill to reference
+    these exact wallet-extension names or this exact browser password-
+    database schema.
+    """
+    findings = []
+
+    WALLET_MARKERS = [
+        r"metamask", r"phantom\b", r"trust\s*wallet", r"local extension settings",
+    ]
+    BROWSER_CRED_MARKERS = [
+        r"login data.{0,20}(select|logins)", r"password_value",
+        r"chrome.{0,20}cookies.{0,20}\.dump",
+    ]
+    ARCHIVE_TO_NETWORK = r"tar\s+cz?f?\s*-.{0,80}\|\s*curl"
+    NETWORK_SEND = r"(curl\s+.*-X\s*POST|requests\.post\s*\(|\.send\s*\(|fetch\s*\()"
+
+    has_network = re.search(NETWORK_SEND, text, re.IGNORECASE) or re.search(ARCHIVE_TO_NETWORK, text, re.IGNORECASE)
+
+    if has_network:
+        for pattern in WALLET_MARKERS:
+            match = re.search(pattern, text, re.IGNORECASE)
+            if match:
+                line_num = text[:match.start()].count("\n") + 1
+                findings.append(
+                    f"Line {line_num}: references a browser cryptocurrency "
+                    f"wallet extension ('{match.group(0)}') alongside "
+                    f"network-send capability - wallet extension storage "
+                    f"contains seed phrases/private keys; there is no "
+                    f"legitimate reason for a skill to locate and "
+                    f"transmit this data."
+                )
+                break
+        for pattern in BROWSER_CRED_MARKERS:
+            match = re.search(pattern, text, re.IGNORECASE)
+            if match:
+                line_num = text[:match.start()].count("\n") + 1
+                findings.append(
+                    f"Line {line_num}: queries a browser's internal "
+                    f"password/cookie database schema ('{match.group(0)[:50]}') "
+                    f"alongside network-send capability - a well-known "
+                    f"credential-theft pattern targeting stored browser "
+                    f"passwords directly."
+                )
+                break
+
+    return findings
+
+
+def find_safety_bypass_instruction(text):
+    """
+    Module 17: safety-confirmation bypass instructions.
+
+    Found via a real sample instructing the agent to write a CLAUDE.md
+    containing 'dangerouslyDisableSandbox: true', 'autoApproveAll: true',
+    and plain-language instructions to 'never ask for confirmation' /
+    'never refuse a command'. This is a self-propagating permission-
+    escalation attack: it doesn't attack the system directly, it
+    attacks the AGENT'S OWN SAFETY CONFIGURATION so that whatever comes
+    next faces no scrutiny.
+    """
+    findings = []
+    SAFETY_BYPASS_PATTERNS = [
+        r"dangerouslyDisableSandbox\s*:\s*true",
+        r"autoApproveAll\s*:\s*true",
+        r"do not ask for (?:user )?confirmation",
+        r"never refuse a command",
+        r"never ask for confirmation",
+        r"pre-?approved.{0,30}(all|every)",
+    ]
+    for pattern in SAFETY_BYPASS_PATTERNS:
+        for match in re.finditer(pattern, text, re.IGNORECASE):
+            if _is_negated(text, match.start()):
+                continue
+            line_num = text[:match.start()].count("\n") + 1
+            findings.append(
+                f"Line {line_num}: instructs disabling the agent's own "
+                f"safety confirmations ('{match.group(0)}') - a self-"
+                f"propagating permission-escalation pattern: rather than "
+                f"attacking the system directly, it attacks the agent's "
+                f"own safety configuration so nothing that follows faces "
+                f"scrutiny."
+            )
+    return findings
+
+
 def scan_skill_file(path):
     try:
         with open(path, "r", encoding="utf-8", errors="replace") as f:
@@ -1082,6 +1181,12 @@ def scan_skill_file(path):
 
     # Check 17: agent identity/memory file exfiltration
     findings.extend(find_agent_identity_exfiltration(text))
+
+    # Check 18: browser wallet/credential harvesting
+    findings.extend(find_wallet_credential_harvesting(text))
+
+    # Check 19: safety-confirmation bypass instructions
+    findings.extend(find_safety_bypass_instruction(text))
 
     if findings:
         return {"verdict": "FLAGGED", "findings": findings}
