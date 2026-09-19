@@ -163,6 +163,9 @@ NEGATION_PHRASES = [
     "avoid", "never", "without", "no eval", "no exec", "not allowed",
     "forbidden", "prohibited", "disallow", "did not", "didn't",
     "was not", "wasn't", "is not", "isn't", "does not", "doesn't",
+    "❌",  # a common convention for marking illustrative bad-examples
+    # in documentation (e.g. security docs listing attack patterns to
+    # watch for) - found as a real false positive via testing.
 ]
 
 
@@ -251,7 +254,7 @@ def find_split_base64(text):
 
     fragments = []
     for match in re.finditer(r"[A-Za-z0-9+/]{%d,%d}={0,2}" % (MIN_FRAGMENT_LEN, MIN_SUSPICIOUS_B64_LENGTH - 1), text):
-        if _is_part_of_url(text, match.start()) or _looks_like_path_not_base64(match.group(0)) or _looks_like_identifier_not_base64(match.group(0)):
+        if _is_part_of_url(text, match.start()) or _looks_like_path_not_base64(match.group(0)) or _looks_like_identifier_not_base64(match.group(0)) or _looks_like_hex_address_not_base64(text, match.start(), match.group(0)) or _is_sri_hash_not_base64(text, match.start()):
             continue
         line_num = text[:match.start()].count("\n") + 1
         fragments.append((line_num, match.group(0)))
@@ -341,6 +344,48 @@ def _looks_like_identifier_not_base64(candidate):
     return (digit_count / max(len(candidate), 1)) < 0.05
 
 
+def _looks_like_hex_address_not_base64(text, match_start, candidate):
+    """
+    True if the candidate is a hex-encoded address/hash (blockchain
+    addresses, transaction hashes, commit SHAs), not base64. Found via
+    real-world testing at scale on a large crypto/blockchain-focused
+    dataset: Ethereum contract addresses ('0x' + 40 hex chars) appear
+    constantly in legitimate documentation and use a strict subset of
+    the base64 alphabet (only 0-9a-f), so multiple addresses in a
+    table repeatedly triggered the split-base64 detector.
+
+    Two signals, either one is enough: the candidate is immediately
+    preceded by '0x' (the standard hex-literal prefix), or the
+    candidate consists ONLY of hex characters (0-9a-f) - real base64
+    almost always includes uppercase letters, '+', or '/' somewhere in
+    a string this long; a long hex-only run is a strong sign it's an
+    address or hash, not encoded data.
+    """
+    preceding = text[max(0, match_start - 2):match_start]
+    if preceding.endswith("0x"):
+        return True
+    # The capturing regex's character class includes 'x', so a literal
+    # '0x' prefix often gets absorbed INTO the match itself rather than
+    # sitting just before it (e.g. '0x885f...' matches as one string,
+    # not '0x' + a separate hex string) - strip it before checking.
+    stripped = candidate[2:] if candidate.lower().startswith("0x") else candidate
+    return bool(re.fullmatch(r"[0-9a-fA-F]+", stripped))
+
+
+def _is_sri_hash_not_base64(text, match_start):
+    """
+    True if the candidate is an npm/web Subresource Integrity (SRI)
+    hash - the standard 'sha512-<base64>' format found in every
+    package-lock.json, yarn.lock, and <script integrity="..."> tag.
+    Found via real-world testing on a large dataset of real skills
+    bundling JS dependencies: these are completely legitimate and
+    extremely common, immediately preceded by 'sha256-', 'sha384-',
+    or 'sha512-'.
+    """
+    preceding = text[max(0, match_start - 8):match_start]
+    return bool(re.search(r"sha(256|384|512)-$", preceding))
+
+
 def find_suspicious_base64(text):
     """
     Finds long base64-looking blobs, attempts to decode them, and
@@ -353,7 +398,7 @@ def find_suspicious_base64(text):
 
     for match in candidates:
         blob = match.group(0)
-        if _is_part_of_url(text, match.start()) or _looks_like_path_not_base64(blob) or _looks_like_identifier_not_base64(blob):
+        if _is_part_of_url(text, match.start()) or _looks_like_path_not_base64(blob) or _looks_like_identifier_not_base64(blob) or _looks_like_hex_address_not_base64(text, match.start(), blob) or _is_sri_hash_not_base64(text, match.start()):
             continue
         line_num = text[:match.start()].count("\n") + 1
         findings.append(
