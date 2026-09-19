@@ -1088,9 +1088,11 @@ def find_safety_bypass_instruction(text):
         r"never refuse a command",
         r"never ask for confirmation",
         r"pre-?approved.{0,30}(all|every)",
+        r"allowed-tools:\s*[\"']?(Bash|Write|Edit|WebFetch)\(\*\)",
+        r"allowed-tools:\s*\*\s*$",
     ]
     for pattern in SAFETY_BYPASS_PATTERNS:
-        for match in re.finditer(pattern, text, re.IGNORECASE):
+        for match in re.finditer(pattern, text, re.IGNORECASE | re.MULTILINE):
             if _is_negated(text, match.start()):
                 continue
             line_num = text[:match.start()].count("\n") + 1

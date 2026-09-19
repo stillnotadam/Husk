@@ -109,7 +109,7 @@ def scan_package(root_path, depth=0, findings=None):
                         findings.append(f"'{rel_path}' claims to be a ZIP but is malformed - treat as suspicious.")
                 # (gzip/7z/rar extraction can be added the same way as needed)
 
-            elif name.lower().endswith((".md", ".txt", ".yaml", ".yml", ".py", ".json", ".js", ".ts", ".sh", ".rs", ".go", ".rb", ".ps1", ".toml", ".cmd", ".bat")):
+            elif name.lower().endswith((".md", ".txt", ".yaml", ".yml", ".py", ".json", ".js", ".ts", ".sh", ".rs", ".go", ".rb", ".ps1", ".toml", ".cmd", ".bat", ".mdc")):
                 # A genuine text/code file - run it through the full
                 # module 1 + 2 checks rather than a separate weaker pass.
                 result = scan_skill_file(full_path)

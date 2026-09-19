@@ -372,8 +372,31 @@ sequencing below are about doing it right, not about avoiding it.
       deserves its own dedicated session.
 
 ### E. Platform / format diversity
-- [ ] Claude Code `skill.json` format support
-- [ ] Cursor `manifest.json` format support
+- [x] Claude Code `skill.json` format support - researched the actual
+      format directly rather than assuming: Claude Code does NOT use a
+      separate skill.json; it's still SKILL.md (already fully
+      supported), with a documented set of frontmatter fields including
+      a security-relevant one Husk didn't specifically check:
+      `allowed-tools`, which can declare wildcard tool permissions
+      (`Bash(*)`, `Write(*)`) directly in a skill's own metadata. Added
+      this as a new pattern in module 17 (safety-bypass instructions).
+      Verified: catches a real wildcard-permission example, zero new
+      false positives (244/249 maintained).
+- [x] Cursor `manifest.json` format support - researched the actual
+      format: Cursor's own skills are also just SKILL.md (already
+      supported). Found two genuinely new real formats: `.mdc` files
+      (Cursor Rules - YAML frontmatter + markdown, same shape as
+      SKILL.md, different extension) and `plugin.json` manifests
+      (`.cursor-plugin/plugin.json`), which can define inline hook
+      configs - the same risk shape as the real `.claude/settings.json`
+      SessionStart-hook attack found earlier this session. Added
+      `.mdc` to the scanned file-extension list; verified hidden
+      directories like `.cursor-plugin/` are already walked correctly
+      by the existing package scanner (no fix needed there); built and
+      verified a real test case (a plugin.json with an inline
+      curl|bash hook) - caught correctly by existing checks once the
+      file type was in scope, no new detection logic needed for this
+      part.
 - [ ] Continue expanding scanned file types as real samples justify it
       (same evidence-driven approach used for .rs/.go/.ps1/etc. tonight)
 
