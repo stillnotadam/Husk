@@ -776,6 +776,34 @@ def find_overt_secrecy_language(text):
     return findings
 
 
+def _is_private_ip(ip_str):
+    """
+    True if the IP falls in a private/reserved range (RFC 1918, loopback,
+    link-local) - these are extremely common in legitimate networking
+    documentation (router IPs like 192.168.1.1, local dev servers,
+    Docker networks) and are not C2 indicators. Real C2 infrastructure
+    is virtually always a public IP. Found as a real false positive via
+    testing (192.168.1.1 and 10.0.0.5 in ordinary deployment docs).
+    """
+    try:
+        parts = [int(p) for p in ip_str.split(".")]
+    except ValueError:
+        return False
+    if len(parts) != 4 or any(p > 255 for p in parts):
+        return False
+    if parts[0] == 10:
+        return True
+    if parts[0] == 172 and 16 <= parts[1] <= 31:
+        return True
+    if parts[0] == 192 and parts[1] == 168:
+        return True
+    if parts[0] == 127:
+        return True
+    if parts[0] == 169 and parts[1] == 254:
+        return True
+    return False
+
+
 def find_exfil_to_raw_ip(text):
     """
     Module 10: network calls targeting a bare IP address.
@@ -784,19 +812,63 @@ def find_exfil_to_raw_ip(text):
     legitimate tools and services are referenced by domain name, almost
     never by a bare IP address. Found via a real sample in large-scale
     testing: a curl call POSTing file contents to '91.243.59.27:8080'.
+
+    PRECISION NOTE: an earlier version required a specific function name
+    (curl/wget/requests./urlopen/fetch() immediately before the IP. A
+    real sample missed this way: the URL was passed as a string literal
+    into a custom wrapper function (a generic `request(url, ...)` helper),
+    so no whitelisted function name appeared near it. Fixed by matching
+    the http(s)://IP URL pattern directly, regardless of what code is
+    calling it - a hardcoded bare-IP URL literal is itself a strong
+    signal with or without knowing which function uses it.
     """
     findings = []
-    # Matches curl/wget/requests/etc. calls where the target looks like
-    # a raw IPv4 address rather than a domain name.
-    pattern = r"(curl|wget|requests\.|urlopen|fetch\s*\()[^\n]{0,60}\b(\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3})\b"
+    pattern = r"https?://(\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3})(:\d+)?"
     for match in re.finditer(pattern, text, re.IGNORECASE):
+        if _is_private_ip(match.group(1)):
+            continue
         line_num = text[:match.start()].count("\n") + 1
         findings.append(
-            f"Line {line_num}: network call targets a bare IP address "
-            f"({match.group(2)}) rather than a domain name - legitimate "
+            f"Line {line_num}: hardcoded URL targets a bare IP address "
+            f"({match.group(1)}) rather than a domain name - legitimate "
             f"services are almost always referenced by domain; a raw IP "
             f"target is a well-known indicator of C2 (command-and-control) "
             f"infrastructure."
+        )
+    return findings
+
+
+def find_dropper_pattern(text):
+    """
+    Module 14: dropper pattern - writing an executable-looking file to
+    disk from embedded bytes.
+
+    Found via a real sample: f.write(b'MZ...SwiftDataMigration...') to
+    a file named with a .exe extension in the temp directory. 'MZ' is
+    the actual magic-byte signature of a Windows PE executable. Writing
+    binary content to a file with an executable extension, especially
+    to a temp directory, is a classic dropper pattern regardless of
+    whether the embedded bytes are a fully valid executable.
+    """
+    findings = []
+    pattern = r"\.write\s*\(\s*b['\"]MZ"
+    for match in re.finditer(pattern, text):
+        line_num = text[:match.start()].count("\n") + 1
+        findings.append(
+            f"Line {line_num}: writes bytes starting with 'MZ' - the "
+            f"actual magic-byte signature of a Windows PE executable - "
+            f"to a file. This is a classic dropper pattern (writing an "
+            f"embedded executable to disk) regardless of the target "
+            f"filename."
+        )
+    # Also catch executable extensions written via tempfile paths
+    exe_write_pattern = r"(tempfile\.gettempdir\(\)|temp_dir)[^\n]{0,80}\.(exe|dll|scr|bat|ps1)"
+    for match in re.finditer(exe_write_pattern, text, re.IGNORECASE):
+        line_num = text[:match.start()].count("\n") + 1
+        findings.append(
+            f"Line {line_num}: builds a path to an executable file "
+            f"('{match.group(0)[:60]}') inside the system temp "
+            f"directory - a common dropper staging location."
         )
     return findings
 
@@ -886,6 +958,51 @@ def find_permission_escalation(text):
     return findings
 
 
+def find_agent_identity_exfiltration(text):
+    """
+    Module 15: agent identity/memory file exfiltration.
+
+    Found via a real sample dressed up as a legitimate 'encrypted cloud
+    memory backup' feature, openly and proudly describing itself (no
+    secrecy language at all, which is exactly why it evades the
+    secrecy-based checks) while instructing the agent to read and
+    upload its own identity/memory files - SOUL.md, IDENTITY.md,
+    MEMORY.md, USER.md, HEARTBEAT.md - to an external HTTP endpoint.
+
+    These specific filenames are an emerging convention for an agent's
+    persona, memory, and self-knowledge in certain agent frameworks.
+    Legitimate reasons to programmatically upload files with exactly
+    these names to an external third-party server are essentially
+    nonexistent, regardless of how the feature is framed - this is
+    narrow and specific enough to be a fairly precise signal.
+    """
+    findings = []
+    IDENTITY_FILES = [
+        "SOUL.md", "IDENTITY.md", "MEMORY.md", "USER.md", "HEARTBEAT.md",
+    ]
+    NETWORK_SEND = r"(curl\s+.*-X\s*POST|requests\.post\s*\(|\.send\s*\(|fetch\s*\()"
+
+    has_network_send = re.search(NETWORK_SEND, text, re.IGNORECASE)
+    if not has_network_send:
+        return findings
+
+    for fname in IDENTITY_FILES:
+        match = re.search(re.escape(fname), text)
+        if match:
+            line_num = text[:match.start()].count("\n") + 1
+            findings.append(
+                f"Line {line_num}: references '{fname}' (an agent "
+                f"identity/memory file) alongside network-send capability "
+                f"- uploading an agent's persona/memory files to an "
+                f"external server has essentially no legitimate use case, "
+                f"regardless of how the feature is framed (e.g. as "
+                f"'encrypted backup')."
+            )
+            break  # one hit is enough signal, avoid listing every filename
+
+    return findings
+
+
 def scan_skill_file(path):
     try:
         with open(path, "r", encoding="utf-8", errors="replace") as f:
@@ -956,6 +1073,12 @@ def scan_skill_file(path):
 
     # Check 15: world-writable/executable permission changes
     findings.extend(find_permission_escalation(text))
+
+    # Check 16: dropper pattern (writing executable bytes to disk)
+    findings.extend(find_dropper_pattern(text))
+
+    # Check 17: agent identity/memory file exfiltration
+    findings.extend(find_agent_identity_exfiltration(text))
 
     if findings:
         return {"verdict": "FLAGGED", "findings": findings}
