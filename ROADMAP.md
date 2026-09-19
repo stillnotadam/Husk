@@ -250,3 +250,66 @@ word nearby), plus two further precision bugs in that fix itself
 tables). Final verified result: 48.9% (3,681/7,526), 248/249 real
 legitimate skills clean - same baseline as always, zero new false
 positives. Full story in BENCHMARK.md.
+
+## Tier 3 - "Founder of something genuinely great"
+
+The explicit goal: real competition with actual companies in this
+space, on quality and depth, not just on having tried. Precision and
+recall must both keep climbing together - a bigger number that costs
+false positives doesn't count as progress (see the agent-audit-kit
+benchmark for exactly why). Nothing here is off-limits; scope and
+sequencing below are about doing it right, not about avoiding it.
+
+### A. Bulk real-sample sourcing (keep expanding, don't stop at 7,526)
+- [ ] Find and pull additional real-malicious-skill datasets beyond
+      MaliciousSkillBench (check for newer/larger academic releases,
+      other GitHub source-artifact repos like the ones already found)
+- [ ] Specifically target sophisticated, non-templated samples (the
+      AgentTrap-style diverse dataset, not just campaign-style dumps)
+      to stress-test beyond pattern-matching one attacker's style
+
+### B. Precision + recall, tracked together
+- [ ] Every future module addition reports BOTH numbers, not just
+      recall - a module that raises recall but drops the false-positive
+      baseline below 98% doesn't ship as-is
+- [ ] Re-run the full 7,526 (+ any newly added) real-malicious set and
+      the full real-legitimate set after every batch of changes
+
+### C. Competitor benchmarking - real, viable competitors only
+- [x] SkillScan - decisive win, clean data
+- [x] agent-audit-kit - nuanced, honest precision/recall tradeoff
+- [ ] skillscan-security - retry properly (their real research tool;
+      blocked tonight by this environment's network access, not by
+      the tool itself - worth a real second attempt with a workaround)
+- [ ] Find 1-2 more real, viable competitors beyond what's been tried
+      (skip ones already shown to be a scope mismatch or environmentally
+      blocked for good reason - target ones with a real chance of
+      teaching us something)
+- [ ] Snyk: access remains blocked; revisit only if a free/trial path
+      surfaces (see the earlier email-outreach suggestion)
+
+### D. Learn from competitor source code directly
+- [ ] Read agent-audit-kit's actual rule source (357 rules - what
+      categories does it cover that Husk doesn't? Where does its
+      higher raw recall actually come from?)
+- [ ] Re-read Snyk agent-scan's source (already cloned) specifically
+      for detection *technique* ideas, separate from the access-model
+      finding already documented
+- [ ] Same for SkillScan's source, already installed
+
+### E. Platform / format diversity
+- [ ] Claude Code `skill.json` format support
+- [ ] Cursor `manifest.json` format support
+- [ ] Continue expanding scanned file types as real samples justify it
+      (same evidence-driven approach used for .rs/.go/.ps1/etc. tonight)
+
+### F. Dynamic sandboxed analysis (scoped honestly)
+- [ ] Design a real, safe execution-observation layer: run a skill's
+      scripts with network egress restricted to nothing (catches
+      logic-bomb/delayed-activation behavior no static or LLM read can
+      see) - this needs to be built carefully, with real safety
+      boundaries, not rushed
+- [ ] Validate it against real samples where static analysis is known
+      to structurally fail (the SMP/dynamically-generated-payload class
+      documented in BENCHMARK.md) to see what, if anything, becomes
+      newly detectable
