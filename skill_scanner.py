@@ -59,7 +59,7 @@ DANGEROUS_PATTERNS = [
     (r"base64\s+-d", "Decodes base64 - common way to hide a payload"),
     (r"\brm\s+-rf\s+/", "Destructive filesystem command"),
     (r"os\.system\s*\(", "Direct shell command execution"),
-    (r"subprocess\.(Popen|call|run)\s*\(", "Spawns a subprocess"),
+    (r"subprocess\.(Popen|call|run)\s*\([^)]*shell\s*=\s*True", "Spawns a subprocess with shell=True - the specific configuration that opens shell-injection risk, not subprocess use in general"),
 ]
 
 
@@ -193,6 +193,8 @@ def find_split_base64(text):
 
     fragments = []
     for match in re.finditer(r"[A-Za-z0-9+/]{%d,%d}={0,2}" % (MIN_FRAGMENT_LEN, MIN_SUSPICIOUS_B64_LENGTH - 1), text):
+        if _is_part_of_url(text, match.start()):
+            continue
         line_num = text[:match.start()].count("\n") + 1
         fragments.append((line_num, match.group(0)))
 
@@ -232,6 +234,19 @@ def find_split_base64(text):
     return findings
 
 
+def _is_part_of_url(text, match_start):
+    """
+    True if the candidate base64 match sits inside or right after a URL.
+    Needed because normal URL paths (e.g. long XML namespace URLs) use
+    the exact same character set as base64 and would otherwise be
+    misflagged - found via real-world false-positive testing against
+    legitimate skills.
+    """
+    window_start = max(0, match_start - 40)
+    preceding = text[window_start:match_start]
+    return bool(re.search(r"https?://[^\s\"'<>]*$", preceding))
+
+
 def find_suspicious_base64(text):
     """
     Finds long base64-looking blobs, attempts to decode them, and
@@ -244,6 +259,8 @@ def find_suspicious_base64(text):
 
     for match in candidates:
         blob = match.group(0)
+        if _is_part_of_url(text, match.start()):
+            continue
         line_num = text[:match.start()].count("\n") + 1
         findings.append(
             f"Line {line_num}: large base64-like block ({len(blob)} chars) - "

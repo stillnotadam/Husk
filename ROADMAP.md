@@ -14,8 +14,20 @@ not just assertion. This file tracks exactly what's left to get there.
       engineering telling a human to manually download/run something
       outside the file. Built module 7 specifically for this. Re-tested:
       8/8 caught, no regressions on the 12 existing self-built test cases.
-- [ ] **False-positive testing at scale** - have the dataset's 223 benign
-      samples now; need to actually run all of them through the scanner
+- [ ] **False-positive testing at scale** - validated against 16 real skill
+      packages (Snyk's own open-source test fixtures: canvas-design,
+      slack-gif-creator, mcp-builder, skill-creator, webapp-testing,
+      docx, xlsx, pptx, pdf, and others, plus their own malicious-skill
+      fixture). Found and fixed two real precision bugs: (1) flagging
+      any subprocess call instead of only shell=True, which broke on
+      legitimate docx/xlsx/pptx skills that shell out normally - fixed
+      to match bandit's own B602 scope; (2) URL paths matching the
+      base64 character class by coincidence - fixed by excluding
+      matches inside URLs. Result: 14/16 clean, 1 correctly-caught
+      known-malicious fixture, 1 legitimate true-positive on shell=True
+      (an objectively elevated-risk pattern, same as bandit would flag,
+      used safely here - expected scanner behavior, not a bug). Still
+      want a larger sample (hundreds) before calling this item done.
 - [ ] **CI pipeline** - GitHub Actions running the full test suite on every
       commit/PR, with a status badge in the README
 - [ ] **Packaging** - `pip install`-able, proper CLI with `--help`, no
