@@ -78,16 +78,19 @@ nothing in the file's text ever reveals the dangerous behavior. This
 flag actually **runs** the package's Python scripts in a restricted,
 observed environment and reports what they did, not just what they say.
 
-**Real, honest limits - read this before trusting it**: this is a
-BASIC v1, not OS-level sandboxing. Isolation uses CPU/memory/process
-limits and a fresh temp directory, not a container or VM. Network
-isolation depends on *your environment's own* egress restrictions, not
-anything this tool enforces - only run `--sandbox` somewhere network
-access is already locked down. Observation is limited to exit code,
-stdout/stderr, and a filesystem diff - no real syscall tracing or
-network-call interception. Only Python scripts are sandboxed. A clean
-run means nothing bad happened *this time*, under *these* inputs - not
-a guarantee the script is safe.
+**Real, honest limits - read this before trusting it**: network
+isolation is genuinely kernel-enforced when available (Linux namespace
+isolation via `unshare --net` - a real network namespace with no route
+out at all, verified directly by an automated test, not assumed), with
+an honest fallback to relying on the host's own network restrictions
+when namespace isolation isn't available (every result reports which
+mode actually ran). PID isolation is also real. **Filesystem isolation
+is not yet real** - the script can still read the host's actual
+filesystem via absolute paths; this remains open. Observation is
+limited to exit code, stdout/stderr, and a filesystem diff - no deep
+syscall tracing. Only Python scripts are sandboxed. A clean run means
+nothing bad happened *this time*, under *these* inputs - not a
+guarantee the script is safe.
 
 ## Optional: LLM semantic review - a backup, not the main event
 

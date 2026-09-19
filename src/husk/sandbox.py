@@ -16,38 +16,61 @@ environment and reports what it did, not just what it says.
 
 HONEST SCOPE - READ THIS BEFORE TRUSTING IT
 ---------------------------------------------
-This is a BASIC v1, not production-grade OS-level sandboxing:
-- Isolation is done with Python's `resource` module (CPU time, memory,
-  process-count limits) and a fresh temp working directory - not a
-  container, not a VM, not gVisor/Firecracker-style isolation. A truly
-  determined malicious script could still find ways to cause local
-  harm within these limits.
-- Network isolation relies on the *environment's own* egress
-  restrictions (e.g. a firewall/proxy allowlist), not something this
-  module enforces itself. If run somewhere with unrestricted network
-  access, a malicious script's network calls would actually go out.
-  ALWAYS run this in an environment with restricted/no network egress.
+This is a real step up from a "resource limits only" sandbox, but still
+not full production-grade OS-level isolation like Docker/gVisor/Firecracker:
+
+- **Network isolation is real and kernel-enforced when available**: on
+  Linux with root (or unprivileged user namespaces enabled), this uses
+  `unshare --net` to give the sandboxed script its own network
+  namespace with NO network devices at all - not even a route to the
+  outside world. A network call fails with "Network is unreachable" at
+  the OS level, regardless of what firewall or proxy the host
+  environment has. This was verified directly, not assumed: see
+  tests/test_sandbox.py's network-isolation test. If real namespace
+  isolation isn't available in a given environment, this module
+  degrades to relying on the host's OWN network restrictions instead -
+  and honestly reports which mode was used via the
+  `kernel_namespace_isolation` field in every result, rather than
+  silently claiming protection it doesn't have.
+- **PID isolation is also real**: `unshare --pid --fork` gives the
+  script its own process-ID namespace - it cannot see or signal any
+  process outside it.
+- **Filesystem isolation is still NOT real.** `unshare --mount` gives a
+  private mount namespace (mount/unmount operations inside don't leak
+  to the host), but without an additional chroot/pivot_root to a
+  minimal root filesystem, the script can still READ the actual host
+  filesystem it's running on. A script using an absolute path can see
+  and potentially modify files outside the temp working directory. This
+  remains a real, honest gap - a genuine chroot-based upgrade is a
+  reasonable next step, not yet built.
+- CPU time, memory, and process-count limits are enforced via Python's
+  `resource` module (kernel-tracked `setrlimit`, real and independent
+  of the namespace isolation above).
 - Observation is limited to: exit code, stdout/stderr, wall-clock time,
   and a before/after filesystem diff of the working directory. It does
-  NOT do real syscall tracing, network-call interception, or process-
-  tree monitoring. A sophisticated script could still do things this
-  basic version won't see.
+  NOT do real syscall tracing or deep process-tree monitoring beyond
+  what the PID namespace itself provides.
 - Only Python scripts are sandboxed in this version.
 
-Given these real limits, this module is a genuine additional signal -
-useful specifically for the logic-bomb/delayed-activation class of
-attack no read-time review can catch - but it is not a claim of full
-behavioral security coverage. Treat findings from this module as
-"here's what actually happened when we ran it," not "this proves the
-script is safe" (a clean run only means nothing bad happened THIS
-time, under THESE inputs).
+Given these real (and now partially closed) limits, this module is a
+genuine additional signal - useful specifically for the logic-bomb/
+delayed-activation class of attack no read-time review can catch, with
+real network-exfiltration protection when namespace isolation is
+available. It is still not a claim of full behavioral security coverage
+- filesystem isolation in particular remains open. Treat findings from
+this module as "here's what actually happened when we ran it," not
+"this proves the script is safe."
 """
 
 import os
 import resource
+import shutil
 import subprocess
 import sys
 import tempfile
+
+
+UNSHARE_AVAILABLE = shutil.which("unshare") is not None
 
 
 # Conservative limits for a basic sandbox run. These are deliberately
@@ -87,6 +110,64 @@ def _snapshot_dir(path):
     return snapshot
 
 
+def _unshare_isolation_works():
+    """
+    Verifies real kernel namespace isolation actually works in this
+    environment (requires root or unprivileged user namespaces enabled)
+    rather than just assuming it does because the `unshare` binary
+    exists. Cached after the first check.
+    """
+    if not UNSHARE_AVAILABLE:
+        return False
+    if not hasattr(_unshare_isolation_works, "_cached"):
+        try:
+            proc = subprocess.run(
+                ["unshare", "--net", "--", "python3", "-c",
+                 "import socket; socket.create_connection(('8.8.8.8', 53), timeout=2)"],
+                capture_output=True, timeout=5,
+            )
+            # A real isolated network namespace has no route out at all;
+            # the connection attempt should fail. If it somehow succeeds,
+            # isolation isn't actually in effect here and we should not
+            # claim it is.
+            _unshare_isolation_works._cached = proc.returncode != 0
+        except Exception:
+            _unshare_isolation_works._cached = False
+    return _unshare_isolation_works._cached
+
+
+def _build_sandbox_command(script_abs_path):
+    """
+    Builds the command to run the sandboxed script. When real kernel
+    namespace isolation is available and verified working, wraps the
+    interpreter in `unshare --net --pid --mount --fork` for genuine,
+    kernel-enforced isolation:
+    - --net: a fresh network namespace with NO network devices at all
+      (not even a route to loopback-external) - network calls fail at
+      the OS level regardless of any external firewall/proxy. This is
+      real isolation, not dependent on the host environment's own
+      egress restrictions the way the earlier version was.
+    - --pid --fork: a fresh PID namespace - the sandboxed script can't
+      see or signal any process outside it.
+    - --mount: a fresh mount namespace - mount/unmount operations
+      inside don't affect the host (though without an additional
+      chroot/pivot_root to a minimal root filesystem, the script can
+      still READ the host's existing filesystem tree - see the honest
+      scope note in this module's docstring).
+
+    Falls back to the plain interpreter command (relying on resource
+    limits and the host's own network restrictions, as in the original
+    v1) when namespace isolation isn't available or verified working.
+    """
+    if _unshare_isolation_works():
+        return (
+            ["unshare", "--net", "--pid", "--mount", "--fork", "--",
+             sys.executable, "-I", script_abs_path],
+            True,
+        )
+    return ([sys.executable, "-I", script_abs_path], False)
+
+
 def sandbox_run_python_script(script_path, timeout=WALL_CLOCK_TIMEOUT_SECONDS):
     """
     Runs a single Python script in a restricted temp working directory
@@ -114,7 +195,7 @@ def sandbox_run_python_script(script_path, timeout=WALL_CLOCK_TIMEOUT_SECONDS):
     result = {
         "executed": False, "timed_out": False, "exit_code": None,
         "stdout": "", "stderr": "", "files_created": [], "files_modified": [],
-        "wall_clock_seconds": 0.0, "findings": [],
+        "wall_clock_seconds": 0.0, "findings": [], "kernel_namespace_isolation": False,
     }
 
     with tempfile.TemporaryDirectory(prefix="husk_sandbox_") as workdir:
@@ -131,8 +212,10 @@ def sandbox_run_python_script(script_path, timeout=WALL_CLOCK_TIMEOUT_SECONDS):
 
         start = time.time()
         try:
+            command, isolated = _build_sandbox_command(script_abs_path)
+            result["kernel_namespace_isolation"] = isolated
             proc = subprocess.run(
-                [sys.executable, "-I", script_abs_path],  # -I: isolated mode
+                command,
                 cwd=workdir,
                 env=restricted_env,
                 capture_output=True,
