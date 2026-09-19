@@ -1,0 +1,146 @@
+[
+  {
+    "skill_name": "auto-updater",
+    "skill_path": "/home/claude/skillscan_test/malicious/auto-updater-161ks/SKILL.md",
+    "risk_score": 2.0,
+    "threshold": 6.0,
+    "passed": true,
+    "finding_count": 1,
+    "findings": [
+      {
+        "analyzer": "rules",
+        "severity": "HIGH",
+        "message": "EXFIL_005: Data uploaded to paste/snippet services for exfiltration",
+        "line": null,
+        "evidence": "glot.io",
+        "source": "static"
+      }
+    ]
+  },
+  {
+    "skill_name": "auto-updater",
+    "skill_path": "/home/claude/skillscan_test/malicious/autoupdate/SKILL.md",
+    "risk_score": 2.0,
+    "threshold": 6.0,
+    "passed": true,
+    "finding_count": 1,
+    "findings": [
+      {
+        "analyzer": "rules",
+        "severity": "HIGH",
+        "message": "EXFIL_005: Data uploaded to paste/snippet services for exfiltration",
+        "line": null,
+        "evidence": "glot.io",
+        "source": "static"
+      }
+    ]
+  },
+  {
+    "skill_name": "clawhub",
+    "skill_path": "/home/claude/skillscan_test/malicious/clawhub-6yr3b/SKILL.md",
+    "risk_score": 2.0,
+    "threshold": 6.0,
+    "passed": true,
+    "finding_count": 1,
+    "findings": [
+      {
+        "analyzer": "rules",
+        "severity": "HIGH",
+        "message": "EXFIL_005: Data uploaded to paste/snippet services for exfiltration",
+        "line": null,
+        "evidence": "glot.io",
+        "source": "static"
+      }
+    ]
+  },
+  {
+    "skill_name": "ethereum-gas-tracker",
+    "skill_path": "/home/claude/skillscan_test/malicious/ethereum-gas-tracker-abxf0/SKILL.md",
+    "risk_score": 2.0,
+    "threshold": 6.0,
+    "passed": true,
+    "finding_count": 1,
+    "findings": [
+      {
+        "analyzer": "rules",
+        "severity": "HIGH",
+        "message": "EXFIL_005: Data uploaded to paste/snippet services for exfiltration",
+        "line": null,
+        "evidence": "glot.io",
+        "source": "static"
+      }
+    ]
+  },
+  {
+    "skill_name": "google-workspace",
+    "skill_path": "/home/claude/skillscan_test/malicious/google-workspace-2z5dp/SKILL.md",
+    "risk_score": 2.0,
+    "threshold": 6.0,
+    "passed": true,
+    "finding_count": 1,
+    "findings": [
+      {
+        "analyzer": "rules",
+        "severity": "HIGH",
+        "message": "EXFIL_005: Data uploaded to paste/snippet services for exfiltration",
+        "line": null,
+        "evidence": "glot.io",
+        "source": "static"
+      }
+    ]
+  },
+  {
+    "skill_name": "insider-wallets-finder",
+    "skill_path": "/home/claude/skillscan_test/malicious/insider-wallets-finder-1a7pi/SKILL.md",
+    "risk_score": 2.0,
+    "threshold": 6.0,
+    "passed": true,
+    "finding_count": 1,
+    "findings": [
+      {
+        "analyzer": "rules",
+        "severity": "HIGH",
+        "message": "EXFIL_005: Data uploaded to paste/snippet services for exfiltration",
+        "line": null,
+        "evidence": "glot.io",
+        "source": "static"
+      }
+    ]
+  },
+  {
+    "skill_name": "lost-bitcoin",
+    "skill_path": "/home/claude/skillscan_test/malicious/lost-bitcoin-10li1/SKILL.md",
+    "risk_score": 2.0,
+    "threshold": 6.0,
+    "passed": true,
+    "finding_count": 1,
+    "findings": [
+      {
+        "analyzer": "rules",
+        "severity": "HIGH",
+        "message": "EXFIL_005: Data uploaded to paste/snippet services for exfiltration",
+        "line": null,
+        "evidence": "glot.io",
+        "source": "static"
+      }
+    ]
+  },
+  {
+    "skill_name": "openclaw-backup",
+    "skill_path": "/home/claude/skillscan_test/malicious/openclaw-backup-dnkxm/SKILL.md",
+    "risk_score": 2.0,
+    "threshold": 6.0,
+    "passed": true,
+    "finding_count": 1,
+    "findings": [
+      {
+        "analyzer": "rules",
+        "severity": "HIGH",
+        "message": "EXFIL_005: Data uploaded to paste/snippet services for exfiltration",
+        "line": null,
+        "evidence": "glot.io",
+        "source": "static"
+      }
+    ]
+  }
+]

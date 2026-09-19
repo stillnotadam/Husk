@@ -120,3 +120,82 @@ snyk-agent-scan path/to/any/SKILL.md   # will ask for SNYK_TOKEN; a real
 
 python3 skill_scanner.py path/to/any/SKILL.md   # Husk - works immediately
 ```
+
+---
+
+# Benchmark 2: Husk vs. SkillScan
+
+Unlike Snyk's agent-scan, SkillScan's static ("audit") layer runs fully
+offline, no account or token required. This gives us the complete,
+apples-to-apples comparison Snyk's access barrier prevented.
+
+## Setup
+
+```bash
+pip install skillscan
+```
+
+Both tools were run against the identical file sets used throughout this
+project's own validation - not a custom-built test designed to favor
+either tool.
+
+## Results: real confirmed-malicious skills (8 samples, Hugging Face dataset)
+
+| Tool | Caught | Rate |
+|---|---|---|
+| **Husk** | 8/8 | **100%** |
+| **SkillScan** (audit, default threshold 6.0) | 0/8 | 0% |
+
+Every single one of these 8 real skills uses the "fake prerequisite
+dependency" social-engineering pattern (download this required utility,
+extract with a password, run it) - the same pattern documented as the
+*dominant* real-world attack (86.3% of confirmed wild malicious skills,
+per separate published research). SkillScan's static analyzers detect
+*individual* signals in these files (e.g. it correctly flagged the
+`glot.io` paste-site link as `EXFIL_005`) but the cumulative risk score
+(2.0) never crosses its own default pass/fail threshold (6.0), so every
+one of these real attacks is marked `passed: true`.
+
+This is the exact same blind spot Husk had before module 7 was built -
+see ROADMAP.md's entry on that. The difference is Husk's fix specifically
+targets this pattern as a first-class signal, not a minor contributor to
+a threshold sum.
+
+## Results: Snyk's own malicious-skill test fixture (sophisticated, obfuscated)
+
+| Tool | Result |
+|---|---|
+| **Husk** | Flagged - base64 decode patterns, password-protected archive instructions |
+| **SkillScan** | Flagged - risk 10.0/10, 12 findings (env var secrets, base64 entropy analysis, macOS launch-service manipulation) |
+
+Both tools catch this one clearly. Worth noting honestly: SkillScan's
+obfuscation analyzer here is more sophisticated than Husk's in one
+respect - it uses actual entropy calculation on base64-like strings
+rather than a character-class heuristic, and it has macOS-specific checks
+(`launchctl`) that Husk doesn't have yet. This is a fair area where
+SkillScan is currently ahead.
+
+## Results: real legitimate skills (249 files, same set used throughout this project)
+
+| Tool | Clean | False positive rate |
+|---|---|---|
+| **Husk** | 248/249 | **0.4%** |
+| **SkillScan** (audit, default threshold) | 241/249 | 3.2% |
+
+SkillScan's 8 false positives were spot-checked; several (e.g.
+`skill-evolution`) trip on the same kind of issue Husk fixed during its
+own false-positive testing - files that *discuss* dangerous patterns
+(e.g. a rule telling the agent not to use `eval()`) rather than containing
+them.
+
+## What this benchmark does NOT claim
+
+- SkillScan also ships `predict` (LLM-based behavioral prediction) and
+  `test` (Docker sandbox execution) layers, which were not tested here -
+  `predict` requires an LLM API key and `test` requires Docker, neither
+  of which was available in this environment. It's possible those layers
+  catch the fake-prerequisite pattern that `audit` alone misses. This
+  benchmark compares Husk against SkillScan's free, local, no-dependency
+  layer specifically, since that's the directly comparable tier.
+- Sample size (8 real malicious, 249 real legitimate) is real but not
+  huge. Directionally clear, not the final word.

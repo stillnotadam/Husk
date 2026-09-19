@@ -92,3 +92,17 @@ not just assertion. This file tracks exactly what's left to get there.
   skill using similar "requires X" language for a normal pip install.
   This was the single most valuable test run so far - self-built
   adversarial testing had a blind spot that only real-world data exposed.
+- 2026-09-19: **Second benchmark completed - this one fully fair, both
+  tools tested locally, no auth barrier.** Installed SkillScan (another
+  real open-source skill scanner, static-analysis layer runs offline)
+  and ran it against the identical real test data used throughout this
+  project. Results: Husk 8/8 vs SkillScan 0/8 on real confirmed-malicious
+  skills (SkillScan's cumulative risk-threshold system doesn't flag the
+  dominant real-world fake-prerequisite pattern even though it detects
+  individual signals within it - the exact blind spot Husk's module 7
+  was built to fix). False positives: Husk 1/249 (0.4%) vs SkillScan
+  8/249 (3.2%) on the same 249 real legitimate skills. Reported fairly:
+  SkillScan's obfuscation analyzer is more sophisticated in one area
+  (entropy-based base64 detection, macOS-specific checks) - both tools
+  correctly caught Snyk's sophisticated malicious-skill fixture. Full
+  writeup in BENCHMARK.md.
