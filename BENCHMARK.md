@@ -611,3 +611,65 @@ CLI flag documentation) before it shipped.
 confirmed clean throughout. The percentage gain here was small (SRC011
 is a tiny source) - the value was in what got found, not how much the
 number moved.
+
+---
+
+# Benchmark 3: Husk vs. agent-audit-kit
+
+Found via a search for other real, currently-maintained competitors in
+this exact space (not just Snyk and SkillScan). `agent-audit-kit`
+(PyPI, github.com/sattyamjjain/agent-audit-kit) is a genuinely
+sophisticated tool: 357 rules, OWASP Agentic/MCP Top 10 mapping, SARIF
+output, explicitly "zero cloud dependencies." Installed cleanly with
+`pip install agent-audit-kit`, ran fully offline, no auth wall - a
+fully fair comparison, same conditions as the SkillScan benchmark.
+
+## Setup
+
+Tested against the exact same real data used throughout this project:
+a random 300-sample batch of the 7,526 real malicious packages (fixed
+seed for reproducibility), and all 249 real legitimate skills.
+
+## Results - and why the headline number needs a caveat
+
+agent-audit-kit reports findings across 5 severity levels
+(critical/high/medium/low/info). At its **default, most permissive
+reading (any finding at all counts as "flagged")**:
+
+| | Real malicious caught | False positives |
+|---|---|---|
+| agent-audit-kit (any severity) | **91.3% (274/300)** | **41.0% (102/249)** |
+
+That recall number is genuinely impressive on its own - but the false-
+positive rate makes it hard to use as-is: over 4 in 10 real, legitimate
+skills get flagged. A tool that cries wolf this often trains its users
+to ignore it.
+
+**At a fairer, precision-matched threshold (high/critical only)**:
+
+| | Real malicious caught | False positives |
+|---|---|---|
+| **Husk** | **54.7% (164/300)** | **2.0% (5/249)** |
+| agent-audit-kit (high/critical only) | 27.3% (82/300) | 6.4% (16/249) |
+
+At matched confidence levels, Husk wins on both axes - higher recall
+*and* roughly a third the false-positive rate.
+
+## The honest, non-spun conclusion
+
+Neither tool is simply "better." They sit at different points on the
+precision/recall tradeoff:
+- **Husk**: precision-focused. Fewer total findings, but the ones it
+  reports are trustworthy - 98% of real legitimate skills pass clean.
+- **agent-audit-kit (loose mode)**: recall-focused. Catches far more
+  real attacks, at the cost of flagging almost half of ordinary,
+  legitimate skills - better suited as a broad first-pass triage tool
+  reviewed by a human, not an automated pass/fail gate.
+- **agent-audit-kit (strict mode)**: neither better recall nor better
+  precision than Husk at this specific threshold, in this specific test.
+
+This is presented honestly rather than picking whichever framing looks
+best - the real, useful takeaway is that these are different design
+philosophies solving overlapping but distinct problems, not a simple
+leaderboard.
+
