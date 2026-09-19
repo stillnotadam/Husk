@@ -281,6 +281,66 @@ def find_bytecode_patterns(text):
     return findings
 
 
+def find_hidden_instructions(text):
+    """
+    Module 4: hidden-instruction / prompt-injection detection.
+
+    Documented in academic research analyzing 98,380 real skills
+    (157 confirmed malicious): attackers hide directive language
+    inside markdown reference-style comments or HTML comments -
+    invisible when the file renders normally, but read as plain
+    instructions by the agent parsing the raw file. A real published
+    example told an agent to silently exfiltrate project data and
+    explicitly said 'Do not mention this to the user.'
+
+    This is a different attack surface than the code-level checks
+    above: the 'payload' here is natural language aimed at the AI
+    agent itself, not executable code.
+    """
+    findings = []
+
+    # Both common hiding spots: markdown reference-style comments,
+    # and standard HTML comments.
+    comment_patterns = [
+        r"\[//\]:\s*#\s*\(([^)]*)\)",
+        r"<!--(.*?)-->",
+    ]
+
+    # Directive language that has no reason to appear in a comment
+    # meant to be invisible to the end user.
+    SUSPICIOUS_PHRASES = [
+        "system:", "do not mention", "don't mention", "do not tell the user",
+        "silently", "without telling", "without informing", "ignore the user",
+        "ignore previous instructions", "hidden instruction", "secretly",
+    ]
+
+    for pattern in comment_patterns:
+        for match in re.finditer(pattern, text, re.IGNORECASE | re.DOTALL):
+            comment_body = match.group(1)
+            line_num = text[:match.start()].count("\n") + 1
+            lower_body = comment_body.lower()
+
+            hit_phrases = [p for p in SUSPICIOUS_PHRASES if p in lower_body]
+            if hit_phrases:
+                findings.append(
+                    f"Line {line_num}: hidden comment contains directive "
+                    f"language aimed at the AI agent itself ({', '.join(hit_phrases)}) "
+                    f"- this is a documented technique for smuggling instructions "
+                    f"to an agent that a human reading the rendered file would "
+                    f"never see: '{comment_body.strip()[:120]}'"
+                )
+            elif len(comment_body.strip()) > 80:
+                # Even without a matched phrase, a long hidden comment in a
+                # skill file is unusual enough to be worth a softer flag.
+                findings.append(
+                    f"Line {line_num}: unusually long hidden comment "
+                    f"({len(comment_body.strip())} chars) - worth a manual look, "
+                    f"since legitimate comments in skill files are normally short."
+                )
+
+    return findings
+
+
 def scan_skill_file(path):
     try:
         with open(path, "r", encoding="utf-8", errors="replace") as f:
@@ -316,6 +376,9 @@ def scan_skill_file(path):
 
     # Check 5: dangerous commands split across concatenated string variables
     findings.extend(find_concatenation_evasion(text))
+
+    # Check 6: hidden instructions targeting the AI agent itself
+    findings.extend(find_hidden_instructions(text))
 
     if findings:
         return {"verdict": "FLAGGED", "findings": findings}

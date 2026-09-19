@@ -18,6 +18,11 @@ Husk is a response to that specific finding - not a general-purpose scanner, but
 | Bytecode / base64 hiding | Encodes the payload so plain-text pattern matching can't read it | Detected, decoded, and recursively re-scanned |
 | Archive indirection | Hides the payload inside a nested archive disguised with an innocent file extension | Detected via real file signatures, not filenames - recurses through nested archives |
 | Prompt-injection against the scanner itself | Talks an LLM-based judge into approving a malicious skill | Not applicable by design - Husk never uses an LLM to make a safety decision; all detection is deterministic pattern analysis |
+| Hidden instructions (prompt injection *targeting the agent*) | Directive language hidden in markdown/HTML comments, invisible on render, instructing the AI agent to act against the user's interest | Detected - verified against a real published example from academic research on 98,380 real-world skills |
+
+## Validated against real-world research, not just self-built test cases
+
+Beyond the self-built test suite, Husk's hidden-instruction detector has been verified against an actual documented attack published in "*'Do Not Mention This to the User': Detecting and Understanding Malicious Agent Skills in the Wild*" - a large-scale academic study that confirmed 157 malicious skills out of a 98,380-skill snapshot. The paper's title comes directly from a real malicious skill instructing an agent to silently exfiltrate data. Husk correctly flags that exact pattern, and correctly leaves a normal, honest code comment unflagged.
 
 ## How detection works, honestly
 
@@ -41,15 +46,17 @@ python3 package_scanner.py path/to/skill_package/
 ## What v1 does NOT do yet
 
 - No packaged CLI install (`pip install` support) yet
-- Not yet tested against real-world malicious skill samples from public research datasets - only against samples built to match documented technique classes
+- Only one real-world-validated pattern so far (hidden instructions); the other three technique classes are still tested only against samples built to match documented technique shapes, not confirmed wild samples
 - No large-scale false-positive testing against a broad set of legitimate skills yet
 - Archive extraction currently supports ZIP; GZIP/7z/RAR extraction is detected but not yet unpacked
+- Does not yet detect credential-harvesting patterns (scanning for .env/.pem/.key files) or exfiltration chains (file read → encode → network send), both documented as common real-world patterns in the same research
 
 ## Research this project is grounded in
 
 - Trail of Bits / Cloud Security Alliance, *"AI Agent Skill Scanners: Bypassed Across the Board"* (June 2026)
 - OWASP Agentic Skills Top 10 (v0.5, June 2026)
 - Cisco skill registry security research (January 2026)
+- *"'Do Not Mention This to the User': Detecting and Understanding Malicious Agent Skills in the Wild"* - 98,380-skill academic study, 157 confirmed malicious
 
 ## License
 
