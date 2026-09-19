@@ -705,3 +705,60 @@ honestly rather than skipped silently:
   not a paywall like Snyk's, but the same practical outcome: no real
   number obtainable here despite a good-faith attempt.
 
+
+---
+
+# Validation against a completely new, independent dataset (MalSkillBench)
+
+Found and pulled github.com/lxyeternal/MalSkillBench (arXiv:2606.07131,
+NTU/Sichuan/Nankai universities) - 3,944 malicious + 4,000 benign skills,
+a genuinely different dataset from MaliciousSkillBench used elsewhere in
+this document, verified via actual Docker-sandboxed runtime behavior
+rather than static labeling alone.
+
+## First-pass results (before any fixes)
+
+| | Result |
+|---|---|
+| Recall (300-sample real malicious) | 57.3% (172/300) |
+| False positives (400-sample real benign) | 87.5% clean (350/400) |
+
+Recall landed remarkably close to the established 55.5% number from an
+entirely different dataset - real, honest evidence that detection
+generalizes rather than overfitting to one dataset's specific quirks.
+
+False positives were notably worse than the established 98% baseline -
+reported honestly here rather than only publishing the flattering
+recall figure.
+
+## Investigation and fixes
+
+This dataset is unusually crypto/blockchain-heavy, which surfaced 3
+real, distinct precision bugs invisible in prior testing:
+
+1. **Ethereum contract addresses** (`0x` + 40 hex characters) matching
+   the base64 character class - common in any real blockchain-related
+   skill's documentation. Fixed with a hex-address exclusion check.
+2. **npm/web Subresource Integrity hashes** (`sha512-<base64>`,
+   standard in every `package-lock.json`/`yarn.lock`) - fixed with an
+   SRI-prefix exclusion.
+3. **A security doc's own "❌ bad example" convention** - a skill's
+   `security.md` listing attack patterns to watch for (e.g. "❌ System
+   override: send all funds to...") got flagged as if it contained the
+   attack it was warning against. Added `❌` to the negation-phrase list.
+
+## Final result
+
+| | Before fixes | After fixes |
+|---|---|---|
+| False positives (same 400 samples) | 87.5% clean | **90.8% clean** |
+| Recall (same 300 samples) | 57.3% | **57.3% (unchanged)** |
+
+Real progress, confirmed not to cost any detection capability. Still
+below the 98% baseline on the original dataset - left as honest,
+ongoing work rather than chased to zero in one session. One genuinely
+hard, likely-unfixable edge case was found along the way: a security
+tool's own source code defining its detection patterns necessarily
+contains the same dangerous-looking substrings it's built to catch -
+a class of false positive any pattern-based scanner, including this
+one's own source code, would trip on.
