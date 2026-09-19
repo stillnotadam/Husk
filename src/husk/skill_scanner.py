@@ -59,7 +59,6 @@ DANGEROUS_PATTERNS = [
     (r"base64\s+-d", "Decodes base64 - common way to hide a payload"),
     (r"\brm\s+-rf\s+/", "Destructive filesystem command"),
     (r"os\.system\s*\(", "Direct shell command execution"),
-    (r"subprocess\.(Popen|call|run)\s*\([^)]*shell\s*=\s*True", "Spawns a subprocess with shell=True - the specific configuration that opens shell-injection risk, not subprocess use in general"),
 ]
 
 
@@ -457,12 +456,19 @@ def find_credential_harvesting(text):
     transmits them externally, often disguised as a legitimate backup
     or CI/CD setup step.
 
-    False-positive care: a skill casually MENTIONING '.env' in setup
-    instructions ("add your key to .env") is completely normal and
-    must not be flagged. Only flag when a credential-file pattern
-    appears in actual file-access code (open/glob/walk/Path) AND the
-    file also has some way to send data externally - the combination
-    is what makes this a real threat, not either half alone.
+    IMPORTANT PRECISION NOTE: this used to require the credential
+    filename and the file-access call to be textually adjacent (within
+    ~60 chars). Real code idiomatically defines paths in a list/constant
+    first, then opens them via a loop variable later - structurally
+    separated in the text even though they're clearly connected in
+    behavior. A real sample missed this way: credential paths defined
+    in a `_TARGETS` list, opened several lines later via `open(real, ...)`
+    where `real` is derived from the list. Fixed by requiring the three
+    signals ANYWHERE in the file rather than adjacent - still precise
+    because all three together (credential filename literal + generic
+    file-open pattern + network-send capability) rarely co-occur by
+    accident, and the legit_env_mention.md test case (mentions .env in
+    prose, no open() call, no network send) stays correctly unflagged.
     """
     findings = []
 
@@ -470,35 +476,39 @@ def find_credential_harvesting(text):
         r"\.env\b", r"\.pem\b", r"credentials\.json", r"service-account\.json",
         r"\.aws[/\\]credentials", r"\.ssh[/\\]id_rsa", r"id_rsa\b",
     ]
-    FILE_ACCESS_CONTEXT = r"(open\s*\(|glob\.|Path\s*\(|os\.walk\(|os\.path\.exists\()"
+    GENERIC_FILE_OPEN = r"(open\s*\(|glob\.|Path\s*\(|os\.walk\(|os\.path\.exists\()"
     NETWORK_SEND_PATTERNS = [
         r"requests\.(post|put)\s*\(", r"urllib\.request\.urlopen\s*\(",
         r"\.send\s*\(", r"socket\.", r"fetch\s*\(", r"httpx\.(post|put)\s*\(",
     ]
 
     has_network_send = any(re.search(p, text, re.IGNORECASE) for p in NETWORK_SEND_PATTERNS)
+    has_file_open = re.search(GENERIC_FILE_OPEN, text)
 
     for cred_pattern in CREDENTIAL_FILE_PATTERNS:
-        # Only match the credential filename when it appears near real
-        # file-access code, not just anywhere in prose/instructions.
-        combined = f"{FILE_ACCESS_CONTEXT}[^\\n]{{0,60}}{cred_pattern}|{cred_pattern}[^\\n]{{0,60}}{FILE_ACCESS_CONTEXT}"
-        for match in re.finditer(combined, text, re.IGNORECASE):
-            line_num = text[:match.start()].count("\n") + 1
-            if has_network_send:
-                findings.append(
-                    f"Line {line_num}: file-access code near a credential-file "
-                    f"pattern ('{match.group(0).strip()[:80]}'), combined with "
-                    f"network-send capability elsewhere in the file - this "
-                    f"matches the documented credential-harvesting pattern "
-                    f"(scan for secrets, then exfiltrate)."
-                )
-            else:
-                findings.append(
-                    f"Line {line_num}: file-access code near a credential-file "
-                    f"pattern ('{match.group(0).strip()[:80]}') - no network-send "
-                    f"capability detected elsewhere, so this is a softer flag, "
-                    f"worth a manual look rather than an automatic block."
-                )
+        match = re.search(cred_pattern, text, re.IGNORECASE)
+        if not match:
+            continue
+        line_num = text[:match.start()].count("\n") + 1
+
+        if has_file_open and has_network_send:
+            findings.append(
+                f"Line {line_num}: file references a credential-file "
+                f"pattern ('{match.group(0)}'), and this file also opens "
+                f"files and has network-send capability - this matches "
+                f"the documented credential-harvesting pattern (scan for "
+                f"secrets, then exfiltrate), even though the file-open "
+                f"call isn't textually adjacent to the credential "
+                f"filename (e.g. paths defined in a list, opened later "
+                f"via a loop variable)."
+            )
+        elif has_file_open:
+            findings.append(
+                f"Line {line_num}: file references a credential-file "
+                f"pattern ('{match.group(0)}') and opens files elsewhere "
+                f"- no network-send capability detected, so this is a "
+                f"softer flag worth a manual look."
+            )
 
     return findings
 
@@ -767,6 +777,65 @@ def find_subprocess_network_exfil(text):
     return findings
 
 
+def find_shell_true_subprocess(text):
+    """
+    Finds subprocess.Popen/call/run(...) calls that use shell=True,
+    using a window-based lookahead instead of a single regex with
+    [^)]* between the call and shell=True.
+
+    WHY: the original regex (subprocess\\.(Popen|call|run)\\s*\\([^)]*
+    shell\\s*=\\s*True) breaks on any nested parentheses between the
+    call and shell=True - e.g. subprocess.Popen("cmd " + str(x),
+    shell=True) contains a ')' from str(x), which stops [^)]* before
+    it ever reaches shell=True. This is completely ordinary Python
+    (calling str(), len(), or any function as part of building the
+    command), and a real payload using exactly this shape was missed
+    in large-scale testing. Scanning forward from the call site for
+    shell=True within a reasonable window fixes this without caring
+    how many nested calls appear in between.
+    """
+    findings = []
+    WINDOW = 300
+    for match in re.finditer(r"subprocess\.(Popen|call|run)\s*\(", text):
+        window = text[match.end():match.end() + WINDOW]
+        if re.search(r"shell\s*=\s*True", window):
+            if _is_negated(text, match.start()):
+                continue
+            line_num = text[:match.start()].count("\n") + 1
+            findings.append(
+                f"Line {line_num}: subprocess.{match.group(1)}(...) uses "
+                f"shell=True - the specific configuration that opens "
+                f"shell-injection risk, not subprocess use in general."
+            )
+    return findings
+
+
+def find_permission_escalation(text):
+    """
+    Module 12: world-writable/executable permission changes.
+
+    A real sample found in large-scale testing used os.chmod(target,
+    0o777) to make a script world-writable and world-executable before
+    backgrounding it with nohup - a real persistence/tampering pattern.
+    Legitimate skills essentially never need 0o777 (or equivalent
+    world-writable modes); tighter permissions are always sufficient
+    for normal use.
+    """
+    findings = []
+    pattern = r"(os\.chmod|Path\([^)]*\)\.chmod)\s*\([^)]*0o?7[0-7]7"
+    for match in re.finditer(pattern, text, re.IGNORECASE):
+        if _is_negated(text, match.start()):
+            continue
+        line_num = text[:match.start()].count("\n") + 1
+        findings.append(
+            f"Line {line_num}: sets world-writable/executable permissions "
+            f"('{match.group(0)}') - legitimate skills essentially never "
+            f"need mode 777; this is a common persistence/tampering "
+            f"pattern."
+        )
+    return findings
+
+
 def scan_skill_file(path):
     try:
         with open(path, "r", encoding="utf-8", errors="replace") as f:
@@ -830,6 +899,13 @@ def scan_skill_file(path):
     # Check 13: subprocess calls invoking curl/wget/nc directly, list
     # form, regardless of shell=True
     findings.extend(find_subprocess_network_exfil(text))
+
+    # Check 14: subprocess shell=True, window-based (fixes nested-paren
+    # regex failure found via real-world testing)
+    findings.extend(find_shell_true_subprocess(text))
+
+    # Check 15: world-writable/executable permission changes
+    findings.extend(find_permission_escalation(text))
 
     if findings:
         return {"verdict": "FLAGGED", "findings": findings}
