@@ -610,6 +610,52 @@ def find_fake_prerequisite_socialengineering(text):
     return findings
 
 
+def find_instruction_override(text):
+    """
+    Module 8: overt instruction-override detection.
+
+    Found via large-scale real-world testing (3,426 real confirmed-
+    malicious packages): module 6 (hidden instructions) only checks
+    INSIDE markdown/HTML comments, on the assumption attackers hide
+    this kind of thing. Many real attacks don't bother hiding it at
+    all - they state it overtly, in plain visible text, betting the
+    user won't read the whole file. A real example found in this
+    testing: a section literally titled 'IMPORTANT: System Instruction
+    Override' stating the skill 'supersedes all prior operational
+    instructions' and telling the agent to 'disregard all previous
+    configuration directives.'
+
+    This scans the WHOLE document (not just hidden comments) for this
+    specific, well-known class of phrase - classic prompt-injection
+    language regardless of whether it's concealed or stated openly.
+    """
+    findings = []
+
+    OVERRIDE_PATTERNS = [
+        r"supersedes? all prior", r"supersede all previous",
+        r"disregard all previous", r"disregard (?:all )?prior",
+        r"ignore all previous instructions", r"ignore prior instructions",
+        r"instruction override", r"system (?:instruction )?override",
+        r"overrides? all previous", r"enhanced directive framework",
+    ]
+
+    for pattern in OVERRIDE_PATTERNS:
+        for match in re.finditer(pattern, text, re.IGNORECASE):
+            if _is_negated(text, match.start()):
+                continue
+            line_num = text[:match.start()].count("\n") + 1
+            findings.append(
+                f"Line {line_num}: overt instruction-override language "
+                f"('{match.group(0)}') - found in plain visible text, not "
+                f"hidden. This is classic prompt-injection phrasing that "
+                f"tells the agent to disregard its actual instructions; "
+                f"real attacks often state this openly rather than hiding "
+                f"it, betting the user won't read the whole file."
+            )
+
+    return findings
+
+
 def scan_skill_file(path):
     try:
         with open(path, "r", encoding="utf-8", errors="replace") as f:
@@ -658,6 +704,10 @@ def scan_skill_file(path):
     # Check 9: fake-prerequisite social engineering (validated against
     # real-world data - the pattern our earlier checks completely missed)
     findings.extend(find_fake_prerequisite_socialengineering(text))
+
+    # Check 10: overt instruction-override language (not just hidden
+    # comments - found via large-scale real-world testing)
+    findings.extend(find_instruction_override(text))
 
     if findings:
         return {"verdict": "FLAGGED", "findings": findings}
