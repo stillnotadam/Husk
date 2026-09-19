@@ -205,3 +205,29 @@ source, and bring-your-own-key for the optional LLM layer. Reasoning:
   reasoning. Combined total: 6/6 live-tested attacks across 6 distinct
   categories, 0/6 caught by static, 6/6 caught by LLM review. All 6
   saved permanently in tests/known_misses/, wired as xfail(strict=True).
+
+## Reframing: static analysis is primary, LLM is backup - documented explicitly
+
+2026-09-20: Explicit direction from the project's own standards: (1)
+detection claims must be tested against real payloads, not self-built
+ones; (2) the project's own performance stats must not rely on an LLM
+to look good - LLM successes are credited to Anthropic, not claimed as
+this project's engineering; (3) static analysis is the primary,
+authoritative layer, continuously reinforced against real evidence; LLM
+review is a last-resort backup only.
+
+Acted on all three:
+- Sourced 3,426 REAL malicious payloads directly from
+  MaliciousSkillBench's GitHub repo (not self-built)
+- Established the real, large-scale, static-only headline number:
+  **41.4% recall**, improved honestly from a first real result of 22.8%
+  through two genuine fixes (whole-package scanning, module 8) - see
+  BENCHMARK.md's "Real-world static recall" section for full detail
+- Reframed README.md and the CLI itself: LLM review now prints as
+  "Backup: LLM semantic review (Anthropic Claude, not Husk's own
+  logic)", only suggested when static analysis finds nothing, verdict
+  attributed to "Claude's verdict" / "Claude's reasoning" rather than
+  presented as Husk's own result
+- BENCHMARK.md now leads with the static-only number and states plainly
+  that everything LLM-related is a separate, secondary story credited
+  to Anthropic

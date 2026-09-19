@@ -29,17 +29,22 @@ def cmd_skill(args):
     exit_code = _print_result(result["verdict"], result["findings"], "skill")
 
     if args.llm_review:
-        print("--- Optional LLM semantic review (sends content to Anthropic's API) ---")
+        print("--- Backup: LLM semantic review (Anthropic Claude, not Husk's own logic) ---")
         with open(args.path, "r", encoding="utf-8", errors="replace") as f:
             content = f.read()
         review = review_skill_with_llm(content)
         if not review["available"]:
             print(f"  [skipped] {review['error']}\n")
         else:
-            print(f"  LLM verdict: {review['verdict']} (confidence: {review['confidence']})")
-            print(f"  Reasoning: {review['reasoning']}\n")
+            print(f"  Claude's verdict: {review['verdict']} (confidence: {review['confidence']})")
+            print(f"  Claude's reasoning: {review['reasoning']}\n")
             if review["verdict"] == "SUSPICIOUS":
                 exit_code = 1
+    elif result["verdict"] == "SAFE":
+        print("Note: static analysis found nothing, but it has real, documented limits")
+        print("against attacks using no code or recognizable keywords (see BENCHMARK.md).")
+        print("For extra assurance on a file you're unsure about, you can opt into a")
+        print("backup LLM review: husk skill <path> --llm-review\n")
 
     return exit_code
 

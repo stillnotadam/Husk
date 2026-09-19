@@ -65,19 +65,32 @@ husk model path/to/model.pkl
 
 Exit code is `0` for SAFE, `1` for FLAGGED - safe to use directly in CI.
 
-## Optional: LLM semantic review
+## Optional: LLM semantic review - a backup, not the main event
+
+Static analysis (above) is Husk's real, primary, measured discipline -
+every number in this README's headline results comes from static
+analysis alone, tested against thousands of real payloads (see
+BENCHMARK.md). That's deliberate: this project's purpose is to prove
+static detection can be built well and reinforced honestly against real
+data, not to lean on a model to do the hard part.
+
+That said, static analysis has a real, honest ceiling - some attacks use
+no code and no recognizable pattern at all, only manipulated intent in
+plain language (see `tests/known_misses/`). For exactly those cases,
+and only as a last resort, Husk can optionally ask an LLM for a second
+opinion:
 
 ```bash
 export ANTHROPIC_API_KEY=your-key-here
 husk skill path/to/SKILL.md --llm-review
 ```
 
-Static analysis (above) is free, local, and instant - but independent
-research (see BENCHMARK.md) shows it structurally cannot catch attacks
-that use plain language instead of code or recognizable keywords (see
-`tests/known_misses/` for two real examples Husk's static scanner
-misses). This flag adds a second opinion from an LLM, which the same
-research shows is the only approach that reliably catches these.
+**To be clear about where credit belongs**: when this catches something
+static analysis can't, that result reflects Anthropic's Claude model's
+own reasoning ability, not engineering work done in this project. Husk's
+job here is limited to building the prompt and calling the API - the
+judgment itself is Claude's, and it should be credited as such rather
+than folded into this project's own detection claims.
 
 **The honest tradeoff, stated up front**: this is not free, not local,
 and not private. It costs tokens and sends the skill's content to

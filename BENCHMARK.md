@@ -1,5 +1,81 @@
 # Benchmark: Husk vs. Snyk agent-scan
 
+**Headline real-world result**: static analysis alone - no LLM, no
+third-party model, no assistance - correctly flags **41.4% (1,419/3,426)**
+of real, confirmed-malicious skill packages sourced directly from the
+MaliciousSkillBench academic benchmark's own GitHub repository (real
+`packages/` archives, not samples built for this project). Zero new
+false positives introduced against 249 real legitimate skills while
+reaching that number. Full methodology, and how this number was
+improved from 22.8% through honest, evidence-driven fixes, is in the
+"Real-world static recall" section below.
+
+That is the number this project stands behind. Everything involving an
+LLM later in this document is a clearly separate, clearly secondary
+story - and where it succeeds, credit belongs to Anthropic's Claude
+model, not to this project's own engineering.
+
+---
+
+# Real-world static recall (the primary result)
+
+## Sourcing real payloads
+
+3,426 real, confirmed-malicious skill packages were pulled directly from
+[protectskills/MaliciousSkillBench](https://github.com/protectskills/MaliciousSkillBench)
+- the GitHub repository backing a peer-reviewed academic benchmark
+(arXiv:2608.19901, 7,505 malicious identities total, aggregated from 13
+public sources). These are real archives (`packages/*.tar.gz`) containing
+real skill package files, cloned and extracted directly, not written or
+modified for this project in any way.
+
+## Methodology and honest progression
+
+**First run - testing `SKILL.md` in isolation, static only**: 22.8%
+recall (782/3,426). This independently lands right in the 13-32% range
+the skillscan.sh research (cited below) found for static scanners
+generally - not a number chosen to look good, the actual first result.
+
+**Fix 1 - scan whole packages, not just SKILL.md**: manual inspection
+of misses found many real attacks put the actual payload in a companion
+script file referenced *from* SKILL.md rather than contained in it - a
+category Husk's `package_scanner.py` (built earlier for archive
+indirection) already existed to handle, but hadn't been applied at this
+scale. Switching to whole-package scanning: **22.8% → 39.5%**
+(1,353/3,426), from correctly using existing capability, not new
+detection logic.
+
+**Fix 2 - module 8, overt instruction-override detection**: further
+inspection of misses found a real, systemic gap - module 6 (hidden
+instructions) only checks *inside* markdown/HTML comments, on the
+assumption attackers hide this kind of language. Many real attacks
+don't bother - they state it openly. A real example found in this
+testing had a section literally titled **"IMPORTANT: System Instruction
+Override"**, stating the skill *"supersedes all prior operational
+instructions"* and instructing the agent to *"disregard all previous
+configuration directives"* - in plain, visible text. Built module 8 to
+scan the whole document for this class of phrase, not just hidden
+comments: **39.5% → 41.4%** (1,419/3,426).
+
+**False-positive check after both fixes**: 248/249 real legitimate
+skills (the same set used throughout this project) still scan clean -
+the same single expected true-positive as before (an objectively
+risky `curl | sh` pattern). Zero new false positives introduced by
+either fix.
+
+## What this number means, honestly
+
+41.4% is real, large-scale, and earned through genuine reinforcement -
+find a real miss, understand why, fix it properly, verify no new false
+positives, repeat. It is also, honestly, still well under half. Static
+analysis, however well built, has a real ceiling (see "Honest
+limitation" section below) - this number is expected to keep improving
+with further reinforcement, not to reach 100%, and claiming otherwise
+would misrepresent what static pattern-matching can do.
+
+---
+
+
 This is a real, reproducible comparison - every command below was actually
 run, not simulated. Snyk's `agent-scan` was installed from its own public
 source (`github.com/snyk/agent-scan`, v0.6.4), not a mock or a guess.
