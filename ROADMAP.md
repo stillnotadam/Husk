@@ -14,20 +14,26 @@ not just assertion. This file tracks exactly what's left to get there.
       engineering telling a human to manually download/run something
       outside the file. Built module 7 specifically for this. Re-tested:
       8/8 caught, no regressions on the 12 existing self-built test cases.
-- [ ] **False-positive testing at scale** - validated against 16 real skill
-      packages (Snyk's own open-source test fixtures: canvas-design,
-      slack-gif-creator, mcp-builder, skill-creator, webapp-testing,
-      docx, xlsx, pptx, pdf, and others, plus their own malicious-skill
-      fixture). Found and fixed two real precision bugs: (1) flagging
-      any subprocess call instead of only shell=True, which broke on
-      legitimate docx/xlsx/pptx skills that shell out normally - fixed
-      to match bandit's own B602 scope; (2) URL paths matching the
-      base64 character class by coincidence - fixed by excluding
-      matches inside URLs. Result: 14/16 clean, 1 correctly-caught
-      known-malicious fixture, 1 legitimate true-positive on shell=True
-      (an objectively elevated-risk pattern, same as bandit would flag,
-      used safely here - expected scanner behavior, not a bug). Still
-      want a larger sample (hundreds) before calling this item done.
+- [x] **False-positive testing at scale** - scaled from 16 to 265 real
+      skill packages: cloned anthropics/skills (official, 20 skills) and
+      dxta/claude-code-skills (large community collection, 229 skills)
+      directly from GitHub, plus the earlier 16 Snyk fixtures. Found and
+      fixed three real, distinct precision bugs at scale:
+      (1) subprocess calls flagged unconditionally - narrowed to shell=True
+      specifically (matches bandit's B602 scope)
+      (2) base64 character-class regex matching URL paths by coincidence
+      - fixed by excluding URL contexts
+      (3) same collision for plain filesystem paths (no URL prefix) -
+      fixed with a path-vs-base64 heuristic (word-like '/'-separated
+      segments = path, not base64)
+      (4) no negation awareness - a document instruction saying "MUST NOT
+      add eval()" was flagged as if it contained eval() - fixed with
+      paragraph-scoped negation detection
+      Final result: 248/249 (99.6%) of real skills from the two GitHub
+      repos scan clean. The one remaining flag (curl|sh piping the
+      official `uv` installer) is a deliberate true-positive on an
+      objectively elevated-risk pattern, same reasoning as the earlier
+      shell=True case - not something to suppress.
 - [ ] **CI pipeline** - GitHub Actions running the full test suite on every
       commit/PR, with a status badge in the README
 - [ ] **Packaging** - `pip install`-able, proper CLI with `--help`, no

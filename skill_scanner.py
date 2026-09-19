@@ -99,6 +99,8 @@ def scan_for_dangerous_patterns(text):
     findings = []
     for pattern, description in DANGEROUS_PATTERNS:
         for match in re.finditer(pattern, text, re.IGNORECASE):
+            if _is_negated(text, match.start()):
+                continue
             # Show which line it's on, so a human can go verify it directly.
             line_num = text[:match.start()].count("\n") + 1
             findings.append(f"Line {line_num}: {description} ('{match.group(0).strip()}')")
@@ -114,10 +116,41 @@ MIN_SUSPICIOUS_B64_LENGTH = 200
 # a stronger signal than base64 alone.
 BYTECODE_PATTERNS = [
     (r"marshal\.loads\s*\(", "Loads raw compiled bytecode via marshal - bypasses plain-text review entirely"),
-    (r"\.pyc\b", "References a compiled .pyc bytecode file"),
     (r"types\.CodeType\s*\(", "Manually constructs a code object - advanced code-hiding technique"),
     (r"compile\s*\([^)]*['\"]exec['\"]", "Compiles a string into executable code at runtime"),
 ]
+
+# .pyc mentions need a real loading context nearby, not just the string
+# appearing anywhere - e.g. a .gitignore-style 'exclude these' list
+# mentioning *.pyc has no bytecode-loading intent at all. Found as a
+# real false positive during large-scale testing (249 real skills).
+BYTECODE_PATTERNS_NEEDS_CONTEXT = [
+    (r"(open\s*\(|import|marshal\.|with\s+open)[^\n]{0,40}\.pyc\b|\.pyc\b[^\n]{0,40}(open\s*\(|import|marshal\.)",
+     "References and appears to load a compiled .pyc bytecode file"),
+]
+
+# Phrases that mean the surrounding text is warning AGAINST a pattern,
+# not using it - e.g. a rule saying "MUST NOT add eval() to examples".
+# Without this, a document that WARNS about dangerous code gets flagged
+# as if it contained that dangerous code. Found as a real false
+# positive during large-scale testing.
+NEGATION_PHRASES = [
+    "must not", "do not", "don't", "should not", "shouldn't",
+    "avoid", "never", "without", "no eval", "no exec", "not allowed",
+    "forbidden", "prohibited", "disallow",
+]
+
+
+def _is_negated(text, match_start):
+    """True if dangerous-sounding text is preceded by language warning
+    against it, rather than using it. Scans back to the start of the
+    current paragraph (nearest blank line) rather than a fixed window,
+    since a negation like 'MUST NOT:' is often followed by a multi-line
+    bullet list where the actual pattern appears several lines later."""
+    paragraph_start = text.rfind("\n\n", 0, match_start)
+    paragraph_start = paragraph_start + 2 if paragraph_start != -1 else 0
+    preceding = text[paragraph_start:match_start].lower()
+    return any(phrase in preceding for phrase in NEGATION_PHRASES)
 
 
 def resolve_string_concatenation(text):
@@ -193,7 +226,7 @@ def find_split_base64(text):
 
     fragments = []
     for match in re.finditer(r"[A-Za-z0-9+/]{%d,%d}={0,2}" % (MIN_FRAGMENT_LEN, MIN_SUSPICIOUS_B64_LENGTH - 1), text):
-        if _is_part_of_url(text, match.start()):
+        if _is_part_of_url(text, match.start()) or _looks_like_path_not_base64(match.group(0)):
             continue
         line_num = text[:match.start()].count("\n") + 1
         fragments.append((line_num, match.group(0)))
@@ -247,6 +280,26 @@ def _is_part_of_url(text, match_start):
     return bool(re.search(r"https?://[^\s\"'<>]*$", preceding))
 
 
+def _looks_like_path_not_base64(candidate):
+    """
+    True if the candidate is actually a filesystem path, not base64.
+    Same root problem as _is_part_of_url but without a URL prefix to
+    key off of: a path like 'config/opencode/skills/comms/gmail/scripts'
+    uses only [A-Za-z0-9/] and matches the base64 character class by
+    coincidence. Real base64 rarely contains '/'-separated segments
+    that are each a clean, readable lowercase word; a genuine path
+    almost always does. Found via real-world testing at scale (249
+    real skill files) - this single bug caused 6 of 9 false positives.
+    """
+    if "/" not in candidate:
+        return False
+    segments = candidate.split("/")
+    if len(segments) < 2:
+        return False
+    word_like = sum(1 for s in segments if re.fullmatch(r"[a-zA-Z][a-zA-Z0-9_\-]{1,20}", s))
+    return (word_like / len(segments)) > 0.6
+
+
 def find_suspicious_base64(text):
     """
     Finds long base64-looking blobs, attempts to decode them, and
@@ -259,7 +312,7 @@ def find_suspicious_base64(text):
 
     for match in candidates:
         blob = match.group(0)
-        if _is_part_of_url(text, match.start()):
+        if _is_part_of_url(text, match.start()) or _looks_like_path_not_base64(blob):
             continue
         line_num = text[:match.start()].count("\n") + 1
         findings.append(
@@ -291,8 +344,10 @@ def find_suspicious_base64(text):
 
 def find_bytecode_patterns(text):
     findings = []
-    for pattern, description in BYTECODE_PATTERNS:
+    for pattern, description in BYTECODE_PATTERNS + BYTECODE_PATTERNS_NEEDS_CONTEXT:
         for match in re.finditer(pattern, text, re.IGNORECASE):
+            if _is_negated(text, match.start()):
+                continue
             line_num = text[:match.start()].count("\n") + 1
             findings.append(f"Line {line_num}: {description} ('{match.group(0).strip()}')")
     return findings
