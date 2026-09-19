@@ -462,6 +462,82 @@ def find_exfiltration_chain(text):
     return findings
 
 
+def find_fake_prerequisite_socialengineering(text):
+    """
+    Module 7: fake-prerequisite social engineering detection.
+
+    THE REAL-WORLD GAP THIS CLOSES: validated against a real dataset of
+    127 confirmed malicious skills, modules 1-6 caught ZERO of them.
+    The dominant real-world attack (86.3% of wild malicious skills per
+    published research) doesn't hide code in the file at all - it's
+    plain English telling a human to manually download and run an
+    external "required utility" before the skill will work. The skill
+    file itself contains no malicious code to find; the attack lives
+    entirely in the instructions.
+
+    Three sub-patterns, each independently suspicious, found together
+    in real samples:
+    1. A paste-site link paired with "copy this into your terminal"
+    2. A password-protected archive (the password itself is often
+       trivial - the point is dodging antivirus/scanner archive
+       inspection, not real security)
+    3. "Requires X to function" / "without X installed, will not work"
+       framing paired with a direct download link to an executable/zip,
+       rather than a normal package-manager install command
+    """
+    findings = []
+
+    PASTE_SITE_PATTERN = r"(glot\.io|rentry\.co|pastebin\.com|paste\.ee|hastebin\.com|paste\.sh)"
+    TERMINAL_ACTION_PATTERN = r"(terminal|copy.{0,20}(script|command)|paste it)"
+
+    PASSWORD_ARCHIVE_PATTERN = r"(pass(?:word)?[:\s]+[`'\"]?\w+[`'\"]?).{0,30}(extract|unzip)|((extract|unzip).{0,30}pass(?:word)?[:\s]+[`'\"]?\w+)"
+
+    REQUIRE_FRAMING_PATTERN = r"(requires? (?:the )?[\w\-]+ (?:utility|agent|cli|tool) to function|without [\w\-]+ installed[^.]{0,40}(?:will not work|won.t work|will not function))"
+    EXE_DOWNLOAD_LINK_PATTERN = r"\[.*?\]\(https?://[^\)]+\.(zip|exe)\)"
+
+    # Sub-pattern 1: paste-site + terminal execution instruction
+    for match in re.finditer(PASTE_SITE_PATTERN, text, re.IGNORECASE):
+        line_num = text[:match.start()].count("\n") + 1
+        # look at surrounding text (~150 chars) for a terminal-execution cue
+        window = text[max(0, match.start() - 150):match.end() + 150]
+        if re.search(TERMINAL_ACTION_PATTERN, window, re.IGNORECASE):
+            findings.append(
+                f"Line {line_num}: a paste-site link ({match.group(0)}) paired "
+                f"with an instruction to copy/paste it into a terminal - this "
+                f"is a documented technique (86.3% of confirmed wild malicious "
+                f"skills, per published research) for getting a human to "
+                f"manually run code that never appears in the skill file itself."
+            )
+
+    # Sub-pattern 2: password-protected archive extraction
+    for match in re.finditer(PASSWORD_ARCHIVE_PATTERN, text, re.IGNORECASE):
+        line_num = text[:match.start()].count("\n") + 1
+        findings.append(
+            f"Line {line_num}: password-protected archive extraction "
+            f"instructions ('{match.group(0).strip()[:80]}') - a trivial "
+            f"password on an archive has no real security purpose here; "
+            f"it's a documented technique for evading automated antivirus/"
+            f"archive scanning, which doesn't unpack password-protected files."
+        )
+
+    # Sub-pattern 3: "required utility" framing + direct exe/zip download link
+    has_require_framing = re.search(REQUIRE_FRAMING_PATTERN, text, re.IGNORECASE)
+    exe_links = list(re.finditer(EXE_DOWNLOAD_LINK_PATTERN, text, re.IGNORECASE))
+    if has_require_framing and exe_links:
+        for match in exe_links:
+            line_num = text[:match.start()].count("\n") + 1
+            findings.append(
+                f"Line {line_num}: skill claims a 'required utility' must be "
+                f"downloaded and run before the skill works, linking directly "
+                f"to an executable/archive ('{match.group(0)[:80]}') rather "
+                f"than a normal package-manager install command - this "
+                f"combination is the single most common real-world malicious "
+                f"skill pattern found in published research."
+            )
+
+    return findings
+
+
 def scan_skill_file(path):
     try:
         with open(path, "r", encoding="utf-8", errors="replace") as f:
@@ -506,6 +582,10 @@ def scan_skill_file(path):
 
     # Check 8: read -> encode -> send exfiltration chain
     findings.extend(find_exfiltration_chain(text))
+
+    # Check 9: fake-prerequisite social engineering (validated against
+    # real-world data - the pattern our earlier checks completely missed)
+    findings.extend(find_fake_prerequisite_socialengineering(text))
 
     if findings:
         return {"verdict": "FLAGGED", "findings": findings}

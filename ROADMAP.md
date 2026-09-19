@@ -6,12 +6,16 @@ not just assertion. This file tracks exactly what's left to get there.
 
 ## Checklist
 
-- [ ] **Real-dataset validation** - test against actual confirmed-malicious
-      skills from published research (not just self-built samples), if the
-      dataset is publicly released
-- [ ] **False-positive testing at scale** - run against hundreds of real,
-      legitimate public skills; target near-zero false positive rate,
-      published with real numbers
+- [x] **Real-dataset validation** - tested against real confirmed-malicious
+      skills from yoonholee/agent-skill-malware (Hugging Face, 127 malicious
+      + 223 benign, real ClawHub attack campaign, Feb 2026). Initial result:
+      0/8 caught - modules 1-6 were all looking for malicious code hidden
+      IN the file; the real dominant attack pattern is plain-English social
+      engineering telling a human to manually download/run something
+      outside the file. Built module 7 specifically for this. Re-tested:
+      8/8 caught, no regressions on the 12 existing self-built test cases.
+- [ ] **False-positive testing at scale** - have the dataset's 223 benign
+      samples now; need to actually run all of them through the scanner
 - [ ] **CI pipeline** - GitHub Actions running the full test suite on every
       commit/PR, with a status badge in the README
 - [ ] **Packaging** - `pip install`-able, proper CLI with `--help`, no
@@ -36,3 +40,18 @@ not just assertion. This file tracks exactly what's left to get there.
   They also have far more test coverage (90 test files vs our 12) and
   broader scope (full agent harnesses + MCP configs, not just skills) -
   worth being honest about in the comparison table too.
+- 2026-09-19: **Major finding.** Pulled real confirmed-malicious skill
+  samples from a public Hugging Face dataset (yoonholee/agent-skill-malware,
+  127 malicious + 223 benign, real ClawHub Feb 2026 attack campaign) and
+  ran Husk against them. Result: 0/8 caught on first run. Every module
+  built so far (1-6) looks for malicious code hidden inside the skill
+  file; the actual dominant real-world attack (86.3% of confirmed wild
+  malicious skills, per separate published research) is pure social
+  engineering in plain English - "download this required utility, extract
+  with this password, run it" - with no malicious code in the file at
+  all. Built module 7 specifically for this gap. Re-tested: 8/8 real
+  samples caught, zero regressions on the 12 self-built test cases,
+  and specifically verified it does NOT false-positive on a legitimate
+  skill using similar "requires X" language for a normal pip install.
+  This was the single most valuable test run so far - self-built
+  adversarial testing had a blind spot that only real-world data exposed.

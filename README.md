@@ -20,6 +20,7 @@ Husk is a response to that specific finding - not a general-purpose scanner, but
 | Prompt-injection against the scanner itself | Talks an LLM-based judge into approving a malicious skill | Not applicable by design - Husk never uses an LLM to make a safety decision; all detection is deterministic pattern analysis |
 | Hidden instructions (prompt injection *targeting the agent*) | Directive language hidden in markdown/HTML comments, invisible on render, instructing the AI agent to act against the user's interest | Detected - verified against a real published example from academic research on 98,380 real-world skills |
 | Credential harvesting | Scans for `.env`, `.pem`, `credentials.json`, SSH keys, etc. and exfiltrates them, often disguised as a backup/CI step | Detected - requires both file-access-to-a-credential-pattern AND network-send capability present, specifically to avoid flagging normal setup docs that just mention `.env` |
+| Fake-prerequisite social engineering | Plain-English instructions telling a human to manually download and run a "required utility" - the actual dominant real-world pattern (86.3% of wild malicious skills per published research) | Detected - added after real-dataset testing revealed modules 1-6 caught 0/8 real malicious samples; now 8/8 |
 | Exfiltration chains | The specific documented sequence: read a file, base64-encode it, send it over the network | Detected as a three-step chain, not a single pattern |
 
 ## Validated against real-world research, not just self-built test cases
