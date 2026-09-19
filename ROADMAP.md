@@ -150,8 +150,22 @@ not just assertion. This file tracks exactly what's left to get there.
       (that's still an honest, true limitation of the free default
       path) - this result specifically validates the opt-in upgrade
       path, not a claim that static analysis itself improved.
-- [ ] Expand known_misses/ into a real regression suite of diverse,
-      non-templated attacks, sourced from independent datasets
+- [x] Expand known_misses/ into a real regression suite of diverse,
+      non-templated attacks, sourced from independent datasets - added
+      tests/known_misses/real_world/, holding 4 verified real samples
+      pulled directly from MaliciousSkillBench sources (not self-
+      crafted): the SRC009 Self-Mutating-Poisoning structural-limit
+      case, the SRC013 "shared bootstrap wrapper" persistence attack,
+      the SRC006 dynamically-generated-payload structural-limit case,
+      and a newly-found real sample (a legitimate-looking "xlsx" skill
+      instructing the agent to embed a hidden worksheet as a covert
+      persistence/watermarking channel, conditionally triggered by a
+      marker file). Combined with the 6 existing illustrative fixtures
+      (grounded in a real taxonomy but not verbatim dataset extracts),
+      the suite now holds 10 known misses across genuinely distinct
+      attack categories, with real vs. illustrative provenance kept
+      honest via directory structure, not blurred together. Verified:
+      13 passed, 10 xfailed - all correctly wired.
 - [ ] Re-evaluate module coverage against attack *dimensions* (the
       AgentTrap taxonomy: exfil, destructive, injection, backdoor,
       resource-abuse, jailbreak, hidden-content, tracking, patch-inject,

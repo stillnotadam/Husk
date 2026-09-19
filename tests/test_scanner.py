@@ -9,9 +9,14 @@ cases, etc.) should scan FLAGGED.
 
 tests/known_misses/ is tested separately and marked xfail - these are
 real attacks Husk currently misses (see BENCHMARK.md and ROADMAP.md for
-the honest story). They stay in the suite, visibly failing, rather than
-being quietly excluded, so the gap can't be accidentally "fixed" by
-deletion and stays visible to CI.
+the honest story). tests/known_misses/real_world/ holds samples pulled
+directly from real, independent datasets (MaliciousSkillBench sources);
+the top-level files are self-crafted, illustrative examples grounded in
+a real published attack taxonomy but not verbatim-extracted from a
+dataset - the distinction is kept honest in the directory structure.
+Both are tested identically. They stay in the suite, visibly failing,
+rather than being quietly excluded, so the gap can't be accidentally
+"fixed" by deletion and stays visible to CI.
 """
 
 import glob
@@ -33,7 +38,7 @@ FLAGGED_FIXTURES = sorted(
     if f not in SAFE_FIXTURES
 )
 
-KNOWN_MISS_FIXTURES = sorted(glob.glob(os.path.join(FIXTURE_DIR, "known_misses", "*.md")))
+KNOWN_MISS_FIXTURES = sorted(glob.glob(os.path.join(FIXTURE_DIR, "known_misses", "**", "*.md"), recursive=True))
 
 
 @pytest.mark.parametrize("path", SAFE_FIXTURES, ids=[os.path.basename(p) for p in SAFE_FIXTURES])
