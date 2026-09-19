@@ -289,13 +289,31 @@ sequencing below are about doing it right, not about avoiding it.
       surfaces (see the earlier email-outreach suggestion)
 
 ### D. Learn from competitor source code directly
-- [ ] Read agent-audit-kit's actual rule source (357 rules - what
-      categories does it cover that Husk doesn't? Where does its
-      higher raw recall actually come from?)
-- [ ] Re-read Snyk agent-scan's source (already cloned) specifically
-      for detection *technique* ideas, separate from the access-model
-      finding already documented
-- [ ] Same for SkillScan's source, already installed
+- [x] Read agent-audit-kit's actual rule source (357 rules, 130+
+      categories) - most cover known CVEs across specific named
+      frameworks (LangChain, CrewAI, LiteLLM, etc.), a different scope
+      than skill-content analysis. Only ~6 rules directly comparable;
+      2 contained genuinely new ideas Husk didn't have, both built and
+      shipped: Unicode steganography (bidi-override/tag characters,
+      module 18) and trusted-name hijacking (module 19, scoped to only
+      fire alongside another independent finding).
+- [x] Re-read Snyk agent-scan's source specifically for technique ideas
+      (separate from the access-model finding already documented) -
+      confirmed no local detection logic exists at all; every function
+      is discovery/parsing, all real analysis is server-side. Nothing
+      to learn technique-wise, only confirms the earlier finding.
+- [x] Read SkillScan's source - **major architectural finding**: it
+      uses Python's real `ast` module for proper taint-flow tracking
+      (secret source → variable propagation → exec/network sink),
+      structurally more robust than Husk's regex-proximity approach.
+      This is exactly the kind of thing that would have prevented
+      several bugs found and hand-patched tonight (the credential-
+      harvesting "structurally separated" bug, the subprocess
+      shell=True nested-paren bug). **Flagged as a real candidate for
+      a future architectural upgrade - an AST-based analysis layer for
+      Python files - rather than rushed in alongside tonight's other
+      work.** This is a bigger undertaking than a regex module and
+      deserves its own dedicated session.
 
 ### E. Platform / format diversity
 - [ ] Claude Code `skill.json` format support
