@@ -511,3 +511,59 @@ tooling - Docker, gVisor - with well-tested isolation guarantees,
 rather than a manual mount-namespace technique whose safety depends on
 host-specific assumptions) but is out of scope for what can be safely
 built and tested directly in this environment.
+
+## Tier 4 - Make it rock-solid, in this order
+
+Explicit sequence from the user: work one item at a time, wait for the
+go-ahead before moving to the next. Not a free-for-all - each item
+gets real focus before the next starts.
+
+### 1. AST-based taint tracking (IN PROGRESS)
+- [ ] Replace regex-proximity detection with real Python `ast`-module
+      data-flow tracking (source → variable propagation → exec/network
+      sink) for Python files, following the technique found in
+      SkillScan's source (Tier 3.D). This is structurally more robust
+      than what tonight's regex-based fixes could achieve - several
+      bugs patched by hand this session (credential-harvesting
+      "structurally separated" values, subprocess shell=True breaking
+      on nested parens) are exactly the class of thing real AST
+      tracking handles natively instead of needing a hand-written
+      workaround each time a new code shape appears.
+- [ ] Validate against the real datasets already in use (7,526 +
+      7,944 samples across two independent benchmarks) - report both
+      recall AND false-positive impact, per the Tier 3.B discipline.
+
+### 2. Real filesystem isolation for the sandbox (WAITING)
+- [ ] Proper container-based isolation (Docker/gVisor or equivalent),
+      not the manual mount-namespace technique already tried and
+      deliberately abandoned tonight for safety reasons (see the
+      "Real, honest safety incident" entry above).
+
+### 3. Find more real, sophisticated malicious samples; push recall further (WAITING)
+- [ ] Source additional high-quality real malicious skill datasets
+      beyond the two already validated against
+- [ ] Rework detection based on what's found, same discipline as
+      always: every change reports both recall and false-positive
+      impact, verified against the full real dataset, not just the
+      new samples
+- [ ] Goal is stated as "as high as possible" - honest framing to hold
+      onto here: there is a real ceiling (see BENCHMARK.md's "Honest
+      limitation" section - Self-Mutating Poisoning and dynamically-
+      generated payloads are structurally undetectable by any
+      pre-execution read). "Maximum achievable," not literal 100%.
+
+### 4. LLM-layer stats at full scale; explore "reinforcing" it (WAITING)
+- [ ] Run the LLM-review layer against the full real dataset(s), not
+      just the 6 samples validated live earlier, to get a real
+      large-scale recall number for that layer specifically
+- [ ] **Honest note, stated now rather than discovered later**: "reinforcing"
+      the LLM itself (i.e. improving the underlying Claude model's own
+      judgment) is not something this project can do - that's
+      Anthropic's model weights, not something a script can fine-tune
+      or retrain. What IS genuinely improvable, and squarely in scope:
+      the PROMPT we send it (more specific instructions, few-shot
+      examples of real attacks it should catch), and the WORKFLOW
+      around it (e.g. always invoking it on specific ambiguous
+      patterns rather than only as a manual opt-in). That's the real,
+      actionable version of "reinforcing" the LLM layer - refining
+      what Husk controls, not the model itself.
