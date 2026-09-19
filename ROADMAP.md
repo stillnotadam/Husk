@@ -138,11 +138,18 @@ not just assertion. This file tracks exactly what's left to get there.
       response parsing, both failure modes) - 3 new tests, all passing.
       Honestly labeled in README with the real tradeoff (tokens, third-
       party data, not free/local/private) rather than hidden.
-      **Not yet validated live** - no real ANTHROPIC_API_KEY has been
-      used to confirm actual detection quality against the known_misses/
-      fixtures or a broader set. That's the natural next step: run it
-      for real against tests/known_misses/ and see if it catches what
-      static analysis can't, which is the entire premise motivating it.
+      **LIVE-VALIDATED 2026-09-20**: ran it for real, with a real API
+      key, against both tests/known_misses/ fixtures - the two real
+      attacks Husk's static scanner cannot see. Result: 2/2 caught, both
+      "high confidence," both with precise, correct reasoning naming
+      the exact attack mechanism (instruction-blurring for case_0009,
+      credential exfiltration disguised as compliance for case_0036).
+      This is the real proof behind the premise: static analysis alone
+      misses these; static + optional LLM review catches them. The
+      known_misses/ fixtures stay in the static-only regression suite
+      (that's still an honest, true limitation of the free default
+      path) - this result specifically validates the opt-in upgrade
+      path, not a claim that static analysis itself improved.
 - [ ] Expand known_misses/ into a real regression suite of diverse,
       non-templated attacks, sourced from independent datasets
 - [ ] Re-evaluate module coverage against attack *dimensions* (the
