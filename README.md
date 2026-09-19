@@ -85,6 +85,23 @@ Anthropic's API. It never runs unless you explicitly pass `--llm-review`,
 and if no API key is set, it skips cleanly - the free static result is
 never affected either way.
 
+### Why this uses your own API key, not a hosted service
+
+Husk will never ask for payment, an account, or a login - and this isn't
+an accident or a limitation, it's a deliberate design choice. Your
+`ANTHROPIC_API_KEY` goes straight from your machine to Anthropic's API;
+Husk (and its author) never sees your key, your usage, your bill, or
+your skill content at any point. There's no server in the middle to
+breach, no proprietary code of yours passing through infrastructure
+someone else runs.
+
+This is also, honestly, a deliberate non-business decision. Husk isn't
+trying to become a company - it's meant to be the most useful, most
+transparent, most honestly-documented free tool it can be in this space.
+If that changes something might get built on top of this later, but the
+free, local-first, BYOK core described in this README is meant to stay
+exactly that.
+
 ## What v1 does NOT do yet
 
 - No packaged CLI install (`pip install` support) yet

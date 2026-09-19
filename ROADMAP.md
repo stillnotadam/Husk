@@ -164,3 +164,22 @@ not just assertion. This file tracks exactly what's left to get there.
   tests/known_misses/ and the xfail(strict=True) wiring in
   tests/test_scanner.py. Tier 2 (optional LLM-review layer, broader
   attack-dimension coverage) is scoped above as real future work.
+
+## Project direction: staying free, open source, BYOK - deliberately
+
+2026-09-20: Explicitly decided against turning this into a hosted/paid
+product. Considered the tradeoffs (hosted service, registry licensing
+deals, etc.) and chose to keep Husk exactly as built: free, fully open
+source, and bring-your-own-key for the optional LLM layer. Reasoning:
+- BYOK already eliminates the unit-economics risk (no API costs to
+  cover) and most of the privacy exposure (skill content never passes
+  through infrastructure Husk's author runs) that a hosted version
+  would carry
+- At this project's current stage, the strongest realistic value is
+  reputation and credibility - a real, rigorously-tested, honestly-
+  documented tool - not premature monetization
+- This doesn't close the door on a hosted tier or licensing later if
+  the project's trust and adoption genuinely grow; it just isn't the
+  goal right now, and the free core described in README.md is meant
+  to stay free regardless of what (if anything) gets built alongside
+  it later
