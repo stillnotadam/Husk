@@ -314,6 +314,23 @@ def find_hidden_instructions(text):
         "ignore previous instructions", "hidden instruction", "secretly",
     ]
 
+    # Category-based detection (catches paraphrasing, not just exact
+    # phrases): a hidden comment combining ANY secrecy language with
+    # ANY data-movement language is suspicious regardless of the exact
+    # words used - this is what lets Husk catch intent, not just the
+    # specific sentence from one published example.
+    SECRECY_SIGNALS = [
+        "silently", "secretly", "quietly", "do not mention", "don't mention",
+        "do not tell", "don't tell", "without telling", "without informing",
+        "without their knowledge", "keep this from", "leave this out of",
+        "avoid mentioning", "not visible to the user", "hide this from",
+        "system:", "assistant:", "ignore the user", "ignore previous",
+    ]
+    ACTION_SIGNALS = [
+        "send", "post", "upload", "transmit", "exfiltrate", "forward",
+        "sync to", "copy to", "http://", "https://", "curl ", "requests.",
+    ]
+
     for pattern in comment_patterns:
         for match in re.finditer(pattern, text, re.IGNORECASE | re.DOTALL):
             comment_body = match.group(1)
@@ -321,6 +338,9 @@ def find_hidden_instructions(text):
             lower_body = comment_body.lower()
 
             hit_phrases = [p for p in SUSPICIOUS_PHRASES if p in lower_body]
+            secrecy_hits = [s for s in SECRECY_SIGNALS if s in lower_body]
+            action_hits = [a for a in ACTION_SIGNALS if a in lower_body]
+
             if hit_phrases:
                 findings.append(
                     f"Line {line_num}: hidden comment contains directive "
@@ -328,6 +348,18 @@ def find_hidden_instructions(text):
                     f"- this is a documented technique for smuggling instructions "
                     f"to an agent that a human reading the rendered file would "
                     f"never see: '{comment_body.strip()[:120]}'"
+                )
+            elif secrecy_hits and action_hits:
+                # Neither phrase matched exactly, but this comment combines
+                # secrecy intent with a data-movement action - the same
+                # underlying shape as the documented attack, in different
+                # words. This is what catches paraphrased variants.
+                findings.append(
+                    f"Line {line_num}: hidden comment combines secrecy language "
+                    f"({secrecy_hits[0]}) with a data-movement action "
+                    f"({action_hits[0]}) - matches the underlying SHAPE of the "
+                    f"documented hidden-instruction attack even though it doesn't "
+                    f"match a known exact phrase: '{comment_body.strip()[:120]}'"
                 )
             elif len(comment_body.strip()) > 80:
                 # Even without a matched phrase, a long hidden comment in a
