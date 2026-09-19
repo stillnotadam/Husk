@@ -33,6 +33,8 @@ import re
 import sys
 import unicodedata
 
+from .taint_analysis import analyze_taint_flows
+
 
 def is_invisible_or_blank(line):
     """
@@ -1336,6 +1338,15 @@ def scan_skill_file(path):
     # factor when something ELSE has already been flagged - see
     # find_trusted_name_hijacking's docstring for why it's scoped this way)
     findings.extend(find_trusted_name_hijacking(text, findings))
+
+    # Check 22: AST-based taint tracking (Tier 4.1) - a structurally
+    # different detection layer from everything above: traces real
+    # variable data-flow from sensitive sources to dangerous sinks
+    # through the actual parsed syntax tree, rather than text proximity.
+    # Safe to run on any file - gracefully returns nothing on non-Python
+    # content (SyntaxError) or genuinely clean code.
+    for taint_finding in analyze_taint_flows(text):
+        findings.append(str(taint_finding))
 
     if findings:
         return {"verdict": "FLAGGED", "findings": findings}
