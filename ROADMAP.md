@@ -213,10 +213,33 @@ not just assertion. This file tracks exactly what's left to get there.
 
       This audit is the map for future module work - a real gap list
       to work from, not a vague sense of "probably missing some stuff."
-- [ ] Basic sandboxed dynamic analysis (catches logic-bomb/delayed-
-      activation attacks no read-time review, static or LLM, can see)
-- [ ] Multi-platform skill format support (Claude Code skill.json,
-      Cursor manifest.json - currently OpenClaw-style SKILL.md only)
+- [x] Basic sandboxed dynamic analysis (catches logic-bomb/delayed-
+      activation attacks no read-time review, static or LLM, can see) -
+      built src/husk/sandbox.py: restricted execution (CPU/memory/
+      process limits via the `resource` module, fresh temp directory,
+      minimal environment), filesystem-diff observation, wired into
+      the CLI as opt-in `husk package <path> --sandbox`. Validated with
+      safe synthetic fixtures (tests/sandbox_fixtures/) demonstrating
+      the real value: a script whose static text gives zero hint of
+      file creation, correctly caught creating a file at runtime by
+      the sandbox alone. Also validated the safety mechanism itself -
+      a hanging script was actually killed by the resource limits, not
+      left running. 4 real automated tests, all passing. Documented
+      honestly in README.md: this is a basic v1 (resource limits + temp
+      dir, not OS-level isolation; relies on the environment's own
+      network restrictions, not something this module enforces itself;
+      Python-only for now) - a real additional signal for the specific
+      logic-bomb class of attack, not a claim of full behavioral
+      security coverage.
+- [x] Multi-platform skill format support (Claude Code skill.json,
+      Cursor manifest.json - currently OpenClaw-style SKILL.md only) -
+      see the fuller writeup under Tier 3.E above: researched both
+      formats directly, found Claude Code and Cursor both actually use
+      SKILL.md (already supported) rather than separate JSON schemas;
+      added real coverage for what IS genuinely new (the `allowed-tools`
+      wildcard-permission frontmatter field, `.mdc` Cursor Rules files,
+      and verified `plugin.json` manifest hooks are already caught by
+      existing checks once the file type is in scope).
 - 2026-09-19: **Tier 1 checklist complete.** All five items done with
   real evidence: real-dataset validation, false-positive testing at
   scale (249 real files), two real benchmarks (Snyk access-model win,

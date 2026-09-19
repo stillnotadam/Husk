@@ -8,12 +8,14 @@ Usage:
 """
 
 import argparse
+import os
 import sys
 
 from .skill_scanner import scan_skill_file
 from .package_scanner import scan_package
 from .pickle_scanner import scan_file as scan_pickle_file
 from .llm_review import review_skill_with_llm
+from .sandbox import sandbox_run_python_script
 
 
 def _print_result(verdict, findings, label):
@@ -52,7 +54,26 @@ def cmd_skill(args):
 def cmd_package(args):
     findings = scan_package(args.path)
     verdict = "FLAGGED" if findings else "SAFE"
-    return _print_result(verdict, findings, "package")
+    exit_code = _print_result(verdict, findings, "package")
+
+    if args.sandbox:
+        import glob
+        print("--- Basic dynamic sandbox (actually RUNS Python scripts - see README.md for real limits) ---")
+        py_scripts = glob.glob(os.path.join(args.path, "**", "*.py"), recursive=True)
+        if not py_scripts:
+            print("  No Python scripts found to sandbox.\n")
+        for script in py_scripts:
+            print(f"  Running: {os.path.relpath(script, args.path)}")
+            result = sandbox_run_python_script(script)
+            if result["findings"]:
+                exit_code = 1
+                for f in result["findings"]:
+                    print(f"    - {f}")
+            else:
+                print("    - No unexpected behavior observed (see README.md - this is not a safety guarantee).")
+        print()
+
+    return exit_code
 
 
 def cmd_model(args):
@@ -82,6 +103,16 @@ def main():
 
     p_package = subparsers.add_parser("package", help="Scan a whole skill package/directory")
     p_package.add_argument("path", help="Path to the skill package directory")
+    p_package.add_argument(
+        "--sandbox", action="store_true",
+        help="Opt-in: ACTUALLY RUNS the package's Python scripts in a "
+             "restricted, observed environment (timeout, CPU/memory limits, "
+             "filesystem-diff observation) to catch logic-bomb/delayed-"
+             "activation behavior no static or LLM read can see. This is a "
+             "BASIC sandbox, not OS-level isolation - read README.md's real "
+             "limits before relying on it, and only run this where network "
+             "egress is already restricted.",
+    )
     p_package.set_defaults(func=cmd_package)
 
     p_model = subparsers.add_parser("model", help="Scan a pickle-based model file")
