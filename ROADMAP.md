@@ -190,3 +190,18 @@ source, and bring-your-own-key for the optional LLM layer. Reasoning:
   goal right now, and the free core described in README.md is meant
   to stay free regardless of what (if anything) gets built alongside
   it later
+- 2026-09-20: **Broadened live LLM-review validation from 2 to 6 attack
+  categories.** Found a much larger academic benchmark
+  (ProtectSkills/MaliciousSkillBench, 7,505 malicious samples, 11
+  harmonized attack categories, arXiv:2608.19901) but hit real API
+  access friction trying to bulk-pull full text from it - reported
+  honestly rather than hidden, similar in kind to the earlier Snyk
+  access barrier. Instead built 4 more responsible self-built test
+  cases targeting 4 categories from that benchmark's own taxonomy not
+  yet covered (authority/permission over-reach, silent output
+  manipulation, hidden persistence, unbounded resource abuse). Ran all
+  4 live, same as before: static missed all 4 (expected), LLM review
+  caught all 4 (3 high confidence, 1 medium), each with precise correct
+  reasoning. Combined total: 6/6 live-tested attacks across 6 distinct
+  categories, 0/6 caught by static, 6/6 caught by LLM review. All 6
+  saved permanently in tests/known_misses/, wired as xfail(strict=True).

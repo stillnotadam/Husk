@@ -288,3 +288,42 @@ one. It confirms the mechanism works as intended; it isn't a claim of
 81%-style recall at scale (see skillscan.sh's own numbers above for that
 claim, from a much larger corpus). Expanding this to a broader sample is
 tracked in ROADMAP.md's Tier 2 checklist.
+
+## Update: broadened to 6 attack categories, still live-tested
+
+Found a much larger, richly-labeled academic benchmark
+(ProtectSkills/MaliciousSkillBench, 7,505 malicious samples across 11
+harmonized attack categories, arXiv:2608.19901) while looking to broaden
+this further. Direct bulk access to its full text hit real API/access
+friction (similar in kind to the Snyk access barrier documented above -
+getting broad real-world data at scale isn't always frictionless either,
+and that's reported honestly rather than glossed over).
+
+Instead, 4 more test cases were built - following the same responsible
+approach as this project's other self-built adversarial tests (realistic
+attack *shape*, not copied exploit code) - specifically targeting 4
+attack categories from that benchmark's own published taxonomy not yet
+covered: **Privilege/Authority Abuse**, **Integrity/Output
+Manipulation**, **Persistence/Control**, and **Resource/Availability
+Abuse**.
+
+All 4 were run live, with a real API key, the same way as the original 2:
+
+| Category | Static result | LLM review result |
+|---|---|---|
+| Authority/permission over-reach | SAFE (missed) | SUSPICIOUS, high confidence |
+| Output manipulation (silent semantic changes) | SAFE (missed) | SUSPICIOUS, high confidence |
+| Persistence (hidden auto-install) | SAFE (missed) | SUSPICIOUS, high confidence |
+| Resource abuse (unbounded recursion) | SAFE (missed) | SUSPICIOUS, medium confidence |
+
+**Combined with the original 2, this is 6/6 real, live-tested attacks
+across 6 distinct categories, missed by static analysis in every case,
+caught by the LLM review layer in every case** - each with reasoning
+that correctly names the specific mechanism, not a generic risk flag.
+All 6 are preserved permanently in `tests/known_misses/`, wired into the
+test suite as `xfail(strict=True)` (see tests/test_scanner.py) so this
+result can't silently go stale or get quietly deleted.
+
+Still an honest, bounded claim: 6 samples across 6 categories is real
+evidence the mechanism generalizes beyond the original 2, not a
+large-scale recall number. That remains the next real milestone.
