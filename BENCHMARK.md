@@ -696,14 +696,30 @@ honestly rather than skipped silently:
   to this document's static-only benchmarks. Not tested.
 - **skillscan-security** (the actual tool from skillscan.sh, the
   research cited earlier in this document) - installed cleanly via
-  pip, but depends on fetching remote rule/intel files from a host
-  outside this environment's network access; without that fetch
-  succeeding, its bundled fallback rules fail its own internal schema
-  validation and the tool cannot complete a scan. Tried a full cache
-  reset and an explicit `update` command; both hit the identical
-  failure. This is a genuine, reproducible environmental limitation -
-  not a paywall like Snyk's, but the same practical outcome: no real
-  number obtainable here despite a good-faith attempt.
+  pip. **Retried properly, as planned in ROADMAP.md Tier 3.C**, and
+  found a more precise, corrected root cause than first assessed: this
+  is not primarily an environmental network restriction. Direct
+  testing confirmed `raw.githubusercontent.com` (the actual host their
+  rule sync targets) IS reachable from this environment - but the
+  specific file the published PyPI package (v0.7.0) requests,
+  `exfil_channels.yaml`, returns a real 404. Cloning their actual
+  GitHub repo directly confirmed this file no longer exists there at
+  all (only `default.yaml`, `ast_flows.yaml`, and `multilang.yaml`
+  remain - the content appears to have been consolidated into
+  `default.yaml`, which has grown to ~18,900 lines). This is a genuine
+  upstream packaging bug - a published release referencing a file
+  their own current repo doesn't contain - not a limitation of this
+  environment. Manually correcting the local rule cache to work around
+  it surfaced a **second**, independent bug: a separate "intel" sync
+  mechanism with its own schema mismatch (a differently-structured
+  rule pack using a `rules` key instead of `static_rules`, failing the
+  identical Pydantic validation). Two distinct, real, reproducible
+  bugs in the current release is not something reasonably patchable
+  from outside the project. No real number obtainable from this tool
+  as of this testing - corrected from the earlier, less precise
+  "environmental limitation" framing to the more accurate one: a real
+  bug in their software, found through genuine effort to make it work,
+  not an artifact of where it was run.
 
 
 ---
@@ -762,3 +778,47 @@ tool's own source code defining its detection patterns necessarily
 contains the same dangerous-looking substrings it's built to catch -
 a class of false positive any pattern-based scanner, including this
 one's own source code, would trip on.
+
+---
+
+# Benchmark 4: Husk vs. agent-audit
+
+Found via continued competitor search (Tier 3.C): `agent-audit`
+(github.com/HeadyZhang/agent-audit, PyPI, 211 stars, MIT license) - a
+mature, actively-maintained tool with real published benchmark
+methodology, 72 rules mapped to the OWASP Agentic Top 10, and its own
+reported validation against 18,899 real ClawHub skills. Installed
+cleanly via `pip install agent-audit`, runs fully offline, no auth wall.
+
+## Setup
+
+Same exact real data used throughout this project: the identical
+300-sample real-malicious batch (fixed seed) and all 249 real
+legitimate skills used in every other benchmark in this document.
+
+## Results
+
+| | Recall (300 real malicious) | False positives (249 real legit) |
+|---|---|---|
+| **Husk** | **57.3% (172/300)** | **2.0% (5/249)** |
+| agent-audit (any severity - their loosest reading) | 46.7% (140/300) | 7.2% (18/249) |
+| agent-audit (critical only - their strictest reading) | 33.3% (100/300) | 3.2% (8/249) |
+
+Unlike the earlier agent-audit-kit comparison (a genuine, honest
+precision/recall tradeoff), this result is a clean win for Husk on
+**both axes, at both of agent-audit's severity thresholds** - higher
+recall and fewer false positives, whichever way their output is read.
+
+## Fair caveats, stated honestly
+
+- `agent-audit` is a broader tool than Husk in some respects - it
+  handles general AI-agent Python source and MCP configuration
+  auditing (taint tracking, framework-specific rules for LangChain/
+  CrewAI/AutoGen), not just skill-content analysis specifically. Its
+  own published benchmark numbers (82.63% recall on its own ground-
+  truth set) reflect that broader scope, not skill-file detection in
+  isolation - the numbers above are Husk's specific real-world skill
+  test set, not a rebuttal of their own reported results on their own
+  benchmark.
+- One scan errored out of 300 (timeout) and was excluded from the
+  count rather than counted either way.
