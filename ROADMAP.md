@@ -34,10 +34,14 @@ not just assertion. This file tracks exactly what's left to get there.
       official `uv` installer) is a deliberate true-positive on an
       objectively elevated-risk pattern, same reasoning as the earlier
       shell=True case - not something to suppress.
-- [ ] **CI pipeline** - GitHub Actions running the full test suite on every
-      commit/PR, with a status badge in the README
-- [ ] **Packaging** - `pip install`-able, proper CLI with `--help`, no
-      manual script-running required
+- [x] **CI pipeline** - GitHub Actions (.github/workflows/tests.yml) runs
+      the full pytest suite across Python 3.10/3.11/3.12 on every push/PR,
+      plus a separate regression check against all 8 real malicious
+      samples. README badge wired to the live workflow.
+- [x] **Packaging** - restructured into src/husk/ package layout, real
+      pyproject.toml, `pip install -e ".[dev]"` verified clean from
+      scratch, `husk` CLI command with skill/package/model subcommands
+      and proper exit codes (0=SAFE, 1=FLAGGED) for scripting/CI use.
 - [x] **Head-to-head benchmark vs. Snyk's agent-scan** - installed Snyk's
       real tool from source (not simulated) and ran it against real skill
       files. Major finding, fully reproducible: Snyk's agent-scan refuses
@@ -136,3 +140,13 @@ not just assertion. This file tracks exactly what's left to get there.
       resource-abuse, jailbreak, hidden-content, tracking, patch-inject,
       poisoning, collusion, homoglyph, typosquat, proxy/oauth, IAM) not
       just against one campaign's specific patterns
+- 2026-09-19: **Tier 1 checklist complete.** All five items done with
+  real evidence: real-dataset validation, false-positive testing at
+  scale (249 real files), two real benchmarks (Snyk access-model win,
+  SkillScan decisive win on identical real data), CI pipeline, and
+  real pip packaging. The honest limitation found via skillscan.sh-
+  motivated testing (novel/disguised attacks) is documented, not
+  hidden, and structurally can't regress silently - see
+  tests/known_misses/ and the xfail(strict=True) wiring in
+  tests/test_scanner.py. Tier 2 (optional LLM-review layer, broader
+  attack-dimension coverage) is scoped above as real future work.
