@@ -19,6 +19,8 @@ Husk is a response to that specific finding - not a general-purpose scanner, but
 | Archive indirection | Hides the payload inside a nested archive disguised with an innocent file extension | Detected via real file signatures, not filenames - recurses through nested archives |
 | Prompt-injection against the scanner itself | Talks an LLM-based judge into approving a malicious skill | Not applicable by design - Husk never uses an LLM to make a safety decision; all detection is deterministic pattern analysis |
 | Hidden instructions (prompt injection *targeting the agent*) | Directive language hidden in markdown/HTML comments, invisible on render, instructing the AI agent to act against the user's interest | Detected - verified against a real published example from academic research on 98,380 real-world skills |
+| Credential harvesting | Scans for `.env`, `.pem`, `credentials.json`, SSH keys, etc. and exfiltrates them, often disguised as a backup/CI step | Detected - requires both file-access-to-a-credential-pattern AND network-send capability present, specifically to avoid flagging normal setup docs that just mention `.env` |
+| Exfiltration chains | The specific documented sequence: read a file, base64-encode it, send it over the network | Detected as a three-step chain, not a single pattern |
 
 ## Validated against real-world research, not just self-built test cases
 
@@ -46,10 +48,10 @@ python3 package_scanner.py path/to/skill_package/
 ## What v1 does NOT do yet
 
 - No packaged CLI install (`pip install` support) yet
-- Only one real-world-validated pattern so far (hidden instructions); the other three technique classes are still tested only against samples built to match documented technique shapes, not confirmed wild samples
-- No large-scale false-positive testing against a broad set of legitimate skills yet
+- No large-scale false-positive testing against a broad set of legitimate skills yet (currently 11 hand-built test cases, 3 clean / 8 flagged, zero false positives so far - but this is a small sample)
 - Archive extraction currently supports ZIP; GZIP/7z/RAR extraction is detected but not yet unpacked
-- Does not yet detect credential-harvesting patterns (scanning for .env/.pem/.key files) or exfiltration chains (file read → encode → network send), both documented as common real-world patterns in the same research
+- Credential-harvesting detection only covers a fixed list of filename patterns (.env, .pem, credentials.json, etc.) - a renamed or unlisted credential file type would be missed
+- Exfiltration-chain detection currently checks for presence of all three steps anywhere in the file, not strict call-order - a coincidental combination could theoretically false-positive, though none has been observed yet
 
 ## Research this project is grounded in
 

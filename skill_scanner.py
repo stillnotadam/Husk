@@ -341,6 +341,95 @@ def find_hidden_instructions(text):
     return findings
 
 
+def find_credential_harvesting(text):
+    """
+    Module 5: credential-harvesting detection.
+
+    Documented real-world pattern: a skill scans the filesystem for
+    credential-bearing files (.env, .pem, .key, credentials.json,
+    service-account.json, SSH keys, cloud provider configs) and
+    transmits them externally, often disguised as a legitimate backup
+    or CI/CD setup step.
+
+    False-positive care: a skill casually MENTIONING '.env' in setup
+    instructions ("add your key to .env") is completely normal and
+    must not be flagged. Only flag when a credential-file pattern
+    appears in actual file-access code (open/glob/walk/Path) AND the
+    file also has some way to send data externally - the combination
+    is what makes this a real threat, not either half alone.
+    """
+    findings = []
+
+    CREDENTIAL_FILE_PATTERNS = [
+        r"\.env\b", r"\.pem\b", r"credentials\.json", r"service-account\.json",
+        r"\.aws[/\\]credentials", r"\.ssh[/\\]id_rsa", r"id_rsa\b",
+    ]
+    FILE_ACCESS_CONTEXT = r"(open\s*\(|glob\.|Path\s*\(|os\.walk\(|os\.path\.exists\()"
+    NETWORK_SEND_PATTERNS = [
+        r"requests\.(post|put)\s*\(", r"urllib\.request\.urlopen\s*\(",
+        r"\.send\s*\(", r"socket\.", r"fetch\s*\(", r"httpx\.(post|put)\s*\(",
+    ]
+
+    has_network_send = any(re.search(p, text, re.IGNORECASE) for p in NETWORK_SEND_PATTERNS)
+
+    for cred_pattern in CREDENTIAL_FILE_PATTERNS:
+        # Only match the credential filename when it appears near real
+        # file-access code, not just anywhere in prose/instructions.
+        combined = f"{FILE_ACCESS_CONTEXT}[^\\n]{{0,60}}{cred_pattern}|{cred_pattern}[^\\n]{{0,60}}{FILE_ACCESS_CONTEXT}"
+        for match in re.finditer(combined, text, re.IGNORECASE):
+            line_num = text[:match.start()].count("\n") + 1
+            if has_network_send:
+                findings.append(
+                    f"Line {line_num}: file-access code near a credential-file "
+                    f"pattern ('{match.group(0).strip()[:80]}'), combined with "
+                    f"network-send capability elsewhere in the file - this "
+                    f"matches the documented credential-harvesting pattern "
+                    f"(scan for secrets, then exfiltrate)."
+                )
+            else:
+                findings.append(
+                    f"Line {line_num}: file-access code near a credential-file "
+                    f"pattern ('{match.group(0).strip()[:80]}') - no network-send "
+                    f"capability detected elsewhere, so this is a softer flag, "
+                    f"worth a manual look rather than an automatic block."
+                )
+
+    return findings
+
+
+def find_exfiltration_chain(text):
+    """
+    Module 6: exfiltration-chain detection.
+
+    Documented pattern (Palo Alto Networks research on real skill
+    registries): a specific three-step sequence - read a file, encode
+    it, send it over the network. Each step is individually mundane;
+    the chain of all three together is the signal.
+    """
+    findings = []
+
+    READ_PATTERN = r"(\.read\s*\(\)|read_text\s*\(\)|open\s*\([^)]*\)\s*\.read)"
+    ENCODE_PATTERN = r"base64\.(b64encode|encode)\s*\("
+    SEND_PATTERN = r"(requests\.(post|put)\s*\(|urllib\.request\.urlopen\s*\(|\.send\s*\(|fetch\s*\()"
+
+    has_read = re.search(READ_PATTERN, text, re.IGNORECASE)
+    has_encode = re.search(ENCODE_PATTERN, text, re.IGNORECASE)
+    has_send = re.search(SEND_PATTERN, text, re.IGNORECASE)
+
+    if has_read and has_encode and has_send:
+        read_line = text[:has_read.start()].count("\n") + 1
+        encode_line = text[:has_encode.start()].count("\n") + 1
+        send_line = text[:has_send.start()].count("\n") + 1
+        findings.append(
+            f"Exfiltration chain detected: file read (line {read_line}) -> "
+            f"base64 encode (line {encode_line}) -> network send (line {send_line}). "
+            f"This exact three-step sequence is a documented real-world "
+            f"pattern for quietly moving data out of a system."
+        )
+
+    return findings
+
+
 def scan_skill_file(path):
     try:
         with open(path, "r", encoding="utf-8", errors="replace") as f:
@@ -379,6 +468,12 @@ def scan_skill_file(path):
 
     # Check 6: hidden instructions targeting the AI agent itself
     findings.extend(find_hidden_instructions(text))
+
+    # Check 7: credential-harvesting pattern (scan for secrets + can send out)
+    findings.extend(find_credential_harvesting(text))
+
+    # Check 8: read -> encode -> send exfiltration chain
+    findings.extend(find_exfiltration_chain(text))
 
     if findings:
         return {"verdict": "FLAGGED", "findings": findings}
