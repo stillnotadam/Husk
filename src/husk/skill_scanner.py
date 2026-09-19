@@ -59,6 +59,9 @@ DANGEROUS_PATTERNS = [
     (r"base64\s+-d", "Decodes base64 - common way to hide a payload"),
     (r"\brm\s+-rf\s+/(\s|['\"]|$)", "Destructive filesystem command targeting the root directory"),
     (r"os\.system\s*\(", "Direct shell command execution"),
+    (r"Invoke-Expression|IEX\s*\(", "PowerShell dynamic code execution (Invoke-Expression/IEX)"),
+    (r"-EncodedCommand\b", "PowerShell encoded (base64) command execution - common obfuscation technique"),
+    (r"DownloadString\s*\(|DownloadFile\s*\(", "PowerShell downloads and often executes remote content"),
 ]
 
 

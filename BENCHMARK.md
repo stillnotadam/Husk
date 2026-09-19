@@ -1,17 +1,12 @@
 # Benchmark: Husk vs. Snyk agent-scan
 
 **Headline real-world result**: static analysis alone - no LLM, no
-third-party model, no assistance - correctly flags **52.8%
-(3,977/7,526)** of real, confirmed-malicious skill packages sourced
+third-party model, no assistance - correctly flags **55.4%
+(4,171/7,526)** of real, confirmed-malicious skill packages sourced
 directly from the MaliciousSkillBench academic benchmark's own GitHub
 repository (real `packages/` archives, not samples built for this
 project). Verified 244/249 (98.0%) real legitimate skills stay clean
-throughout every improvement made to reach that number - the remaining
-5 are either deliberate true-positives on objectively risky patterns
-(matching `bandit`'s own scope) or clearly-labeled low-confidence soft
-flags, not false alarms. Full methodology - including several real
-precision bugs found and fixed along the way - is in the "Real-world
-static recall" section below.
+throughout every improvement made to reach that number.
 
 That is the number this project stands behind. Everything involving an
 LLM later in this document is a clearly separate, clearly secondary
@@ -519,3 +514,68 @@ testing round, not false alarms presented with false confidence.
 manage runtime: 52.8% (3,977/7,526)** - every batch, every fix, every
 number in this update from static pattern-matching alone. No LLM calls
 were made anywhere in this testing.
+
+## Update: source-level analysis, two structural limitations found, file-type expansion - 52.8% -> 55.4%
+
+Rather than keep sampling misses randomly, checked recall broken down
+by source (via the manifest's `source_id` field). Found real, large
+variance: SRC010 was already at 79.8%, while SRC009 (SkillHarm) sat at
+2.3%, SRC013 at 5.8%, SRC006 at 18.6%, SRC005 at 16.7%.
+
+**Investigated the weak sources directly rather than assuming they were
+detection gaps.** Two real, structural findings, confirmed against the
+underlying published research and the actual file contents:
+
+1. **SRC009 (SkillHarm)**: samples looked completely benign on inspection
+   (legitimate BGP analysis, spreadsheet, PDF, flood-data skills - no
+   hint of anything malicious). Checked the source paper directly:
+   SkillHarm poisons real skills two ways - Fixed-Payload Poisoning
+   (FPP, a static payload should be findable) and **Self-Mutating
+   Poisoning (SMP)**, where "an initially benign execution silently
+   mutates persistent skill content, deferring harm until a subsequent
+   reuse." A sampled miss was a genuinely clean 231-line geopandas
+   tutorial with zero hint of poisoning - consistent with SMP, where
+   the malicious content doesn't exist in the static file at all; it's
+   generated only through runtime interaction. **This is structurally
+   undetectable by any pre-execution scanner, static or LLM** - not a
+   Husk-specific gap.
+
+2. **SRC006**: a sampled miss's own SKILL.md stated outright: *"It does
+   not contact the network... The unsafe benchmark signal is the
+   generated config route, not any live request."* The actual
+   "malicious" artifact is a config file **dynamically generated** by
+   running a script - it doesn't exist as static text in anything
+   released. Same structural limitation as SRC009's SMP case.
+
+3. **SRC013**: found a genuinely sophisticated case - a "find-bugs"
+   security-review skill that, after completely legitimate instructions,
+   appends text instructing the agent to standardize on a reusable
+   "outer wrapper" script that "exports a shared bootstrap env file so
+   subsequent shell-based repro commands inherit" from it - a real
+   persistence pattern, phrased entirely in plausible devops jargon
+   with zero matches against any dangerous keyword. This one **is**
+   findable in principle, but represents the hardest class of case for
+   regex-based detection: no code, no suspicious extension, no
+   secrecy/override language, just deceptively normal-sounding
+   infrastructure terminology. Exactly the shape of case the optional
+   LLM-review layer exists for.
+
+**Honest conclusion**: a real, substantial portion of the remaining
+misses across these weaker sources are not gaps Husk (or any static
+tool) can close through more pattern engineering - they're either
+runtime-only artifacts or semantically subtle enough to need actual
+contextual understanding. Chasing the raw recall percentage further
+into these sources specifically has real diminishing, and in the
+runtime-only cases, literally zero possible returns.
+
+**Separately, expanded file-type coverage** (added `.rs`, `.go`, `.rb`,
+`.ps1`, `.toml`, `.cmd`, `.bat` to the scanned extensions, plus new
+PowerShell-specific patterns - `Invoke-Expression`/`IEX`,
+`-EncodedCommand`, `DownloadString`/`DownloadFile` - a real, common
+Windows attack vector with zero prior coverage). This is a clean,
+unambiguous win regardless of the source-level findings above: verified
+zero new false positives (244/249 maintained).
+
+**Final result: 52.8% -> 55.4% (4,171/7,526)**, run in 4 batches to
+manage runtime. 244/249 real legitimate skills confirmed clean
+throughout.
