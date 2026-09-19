@@ -673,3 +673,35 @@ best - the real, useful takeaway is that these are different design
 philosophies solving overlapping but distinct problems, not a simple
 leaderboard.
 
+---
+
+# Other competitors found and their status
+
+A broader search turned up several more real, currently-maintained
+tools in this space. Not all were fair or possible to test - documented
+honestly rather than skipped silently:
+
+- **agentsec-ai** (PyPI) - installed and tested cleanly, but is scoped
+  to full *agent installation* posture (config, versions, known CVEs),
+  not individual skill-content analysis. On the same 100-sample real
+  malicious batch used elsewhere in this document, it produced 0
+  meaningful findings - not because it's worse, but because it doesn't
+  do this specific job. Reporting this as a "loss" for agentsec would
+  be misleading; it's a different category of tool.
+- **AI-Infra-Guard** (Tencent Zhuque Lab, 4,500+ stars) - its primary
+  deployment requires Docker (4GB+ RAM, 10GB+ disk); neither was
+  available in this environment. A lighter standalone `aig-skill-scan`
+  package exists on PyPI, but requires an LLM API key (OpenRouter/
+  DeepSeek) to function - an LLM-based scanner, not directly comparable
+  to this document's static-only benchmarks. Not tested.
+- **skillscan-security** (the actual tool from skillscan.sh, the
+  research cited earlier in this document) - installed cleanly via
+  pip, but depends on fetching remote rule/intel files from a host
+  outside this environment's network access; without that fetch
+  succeeding, its bundled fallback rules fail its own internal schema
+  validation and the tool cannot complete a scan. Tried a full cache
+  reset and an explicit `update` command; both hit the identical
+  failure. This is a genuine, reproducible environmental limitation -
+  not a paywall like Snyk's, but the same practical outcome: no real
+  number obtainable here despite a good-faith attempt.
+
