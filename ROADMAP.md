@@ -131,8 +131,18 @@ not just assertion. This file tracks exactly what's left to get there.
 
 ## Tier 2 (beyond "better than Snyk/SkillScan on known patterns")
 
-- [ ] Optional LLM-based semantic review layer (opt-in, costs tokens,
-      sends data to a third party - labeled honestly, not hidden)
+- [x] Optional LLM-based semantic review layer - built, opt-in via
+      `--llm-review`, requires ANTHROPIC_API_KEY, degrades gracefully
+      with no key or on API failure (static result always unaffected).
+      Structurally tested with mocked API responses (request building,
+      response parsing, both failure modes) - 3 new tests, all passing.
+      Honestly labeled in README with the real tradeoff (tokens, third-
+      party data, not free/local/private) rather than hidden.
+      **Not yet validated live** - no real ANTHROPIC_API_KEY has been
+      used to confirm actual detection quality against the known_misses/
+      fixtures or a broader set. That's the natural next step: run it
+      for real against tests/known_misses/ and see if it catches what
+      static analysis can't, which is the entire premise motivating it.
 - [ ] Expand known_misses/ into a real regression suite of diverse,
       non-templated attacks, sourced from independent datasets
 - [ ] Re-evaluate module coverage against attack *dimensions* (the
@@ -140,6 +150,10 @@ not just assertion. This file tracks exactly what's left to get there.
       resource-abuse, jailbreak, hidden-content, tracking, patch-inject,
       poisoning, collusion, homoglyph, typosquat, proxy/oauth, IAM) not
       just against one campaign's specific patterns
+- [ ] Basic sandboxed dynamic analysis (catches logic-bomb/delayed-
+      activation attacks no read-time review, static or LLM, can see)
+- [ ] Multi-platform skill format support (Claude Code skill.json,
+      Cursor manifest.json - currently OpenClaw-style SKILL.md only)
 - 2026-09-19: **Tier 1 checklist complete.** All five items done with
   real evidence: real-dataset validation, false-positive testing at
   scale (249 real files), two real benchmarks (Snyk access-model win,

@@ -65,6 +65,26 @@ husk model path/to/model.pkl
 
 Exit code is `0` for SAFE, `1` for FLAGGED - safe to use directly in CI.
 
+## Optional: LLM semantic review
+
+```bash
+export ANTHROPIC_API_KEY=your-key-here
+husk skill path/to/SKILL.md --llm-review
+```
+
+Static analysis (above) is free, local, and instant - but independent
+research (see BENCHMARK.md) shows it structurally cannot catch attacks
+that use plain language instead of code or recognizable keywords (see
+`tests/known_misses/` for two real examples Husk's static scanner
+misses). This flag adds a second opinion from an LLM, which the same
+research shows is the only approach that reliably catches these.
+
+**The honest tradeoff, stated up front**: this is not free, not local,
+and not private. It costs tokens and sends the skill's content to
+Anthropic's API. It never runs unless you explicitly pass `--llm-review`,
+and if no API key is set, it skips cleanly - the free static result is
+never affected either way.
+
 ## What v1 does NOT do yet
 
 - No packaged CLI install (`pip install` support) yet
