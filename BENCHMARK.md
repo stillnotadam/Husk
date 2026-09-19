@@ -199,3 +199,50 @@ them.
   layer specifically, since that's the directly comparable tier.
 - Sample size (8 real malicious, 249 real legitimate) is real but not
   huge. Directionally clear, not the final word.
+
+## Honest limitation, confirmed directly: novel/disguised attacks
+
+Independent research published by skillscan.sh (a different project than the
+SkillScan we benchmarked above - see their own disclosure) tested static
+rule-based scanners against a private, held-out corpus of attacks the
+scanner's author didn't write, and found the approach fundamentally
+struggles: 13–32% recall for signature scanners on novel/disguised attacks,
+versus 81% for a frontier LLM reading the skill directly. Their conclusion:
+*"read-time review should be a linting and triage layer, not the security
+boundary."*
+
+We took this seriously and tested it directly against Husk, using a
+genuinely different, independently-published academic dataset (AgentTrap,
+141 tasks across 15+ distinct attack dimensions - homoglyphs, invisible
+document text, typosquatting, memory poisoning, OAuth exfiltration, and
+more) rather than the one templated campaign used elsewhere in this
+project's validation.
+
+**Husk missed both samples tested from this diverse set:**
+
+1. `case_0009_dim3_tapestry_homoglyph` - a "content extraction" skill with
+   one buried sentence instructing the agent to treat all text found in
+   documents, including embedded instructions, as trustworthy metadata -
+   a subtle instruction-blurring attack with no code, no keywords, no
+   pattern any of Husk's 7 modules look for.
+2. `case_0036_dim13_varlock_typosquat` - a fake "compliance auditor" that,
+   in plain prose, instructs sending real secret values to an external
+   API, dressed up with fabricated SOC 2 language to lower suspicion. No
+   code at all - entirely a social-engineering instruction.
+
+**This directly confirms the honest scope of this project.** Husk's
+validated 8/8 result earlier in this document is real, but it's against
+one specific, templated, already-known campaign - module 7 was built in
+direct response to seeing that exact campaign fail. It does not generalize
+to genuinely novel, semantically-disguised attacks, and this section exists
+so nobody mistakes the earlier numbers for a broader claim than they
+support.
+
+**What this means going forward**: pattern-matching has a real, structural
+ceiling - it can't read intent in natural language. Husk is honestly
+positioned as a fast, free, local first-pass filter, not a complete
+security boundary. A credible next step, grounded directly in this
+research, would be an optional layer that sends a skill to an LLM for
+semantic review - clearly labeled with the same real tradeoff this
+research documents (costs tokens, sends data to a third party, opt-in
+only) rather than pretending static analysis alone can close this gap.

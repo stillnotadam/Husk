@@ -106,3 +106,33 @@ not just assertion. This file tracks exactly what's left to get there.
   (entropy-based base64 detection, macOS-specific checks) - both tools
   correctly caught Snyk's sophisticated malicious-skill fixture. Full
   writeup in BENCHMARK.md.
+- 2026-09-19: **Independent research check, and a real, honest finding.**
+  Found skillscan.sh - an independent, rigorously-tested benchmark of
+  skill scanners (built by someone who retired their own static scanner
+  after honestly measuring it against attacks they didn't author).
+  Core finding: static rule-based scanning tops out around 13-32% recall
+  on novel/disguised attacks; only a frontier LLM reading the skill
+  clears 80%+, at the cost of tokens and third-party data sharing.
+  Tested this directly against Husk using a genuinely different academic
+  dataset (AgentTrap, 15+ distinct attack dimensions, not the one
+  campaign used elsewhere in this project's validation). Husk missed
+  both diverse samples tried - saved as tests/known_misses/ so they stay
+  visible, not swept away. This means the earlier "8/8 real malicious"
+  number is real but narrower than it might read: it's validated against
+  one known, templated campaign (which module 7 was built specifically
+  to catch), not against novel/disguised attacks generally. Documented
+  honestly in README.md and BENCHMARK.md. Forward path this motivates:
+  an optional, clearly-labeled LLM-review layer as a Tier 2 item -
+  grounded directly in this research rather than assumed.
+
+## Tier 2 (beyond "better than Snyk/SkillScan on known patterns")
+
+- [ ] Optional LLM-based semantic review layer (opt-in, costs tokens,
+      sends data to a third party - labeled honestly, not hidden)
+- [ ] Expand known_misses/ into a real regression suite of diverse,
+      non-templated attacks, sourced from independent datasets
+- [ ] Re-evaluate module coverage against attack *dimensions* (the
+      AgentTrap taxonomy: exfil, destructive, injection, backdoor,
+      resource-abuse, jailbreak, hidden-content, tracking, patch-inject,
+      poisoning, collusion, homoglyph, typosquat, proxy/oauth, IAM) not
+      just against one campaign's specific patterns

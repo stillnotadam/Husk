@@ -53,6 +53,7 @@ python3 package_scanner.py path/to/skill_package/
 - Archive extraction currently supports ZIP; GZIP/7z/RAR extraction is detected but not yet unpacked
 - Credential-harvesting detection only covers a fixed list of filename patterns (.env, .pem, credentials.json, etc.) - a renamed or unlisted credential file type would be missed
 - Exfiltration-chain detection currently checks for presence of all three steps anywhere in the file, not strict call-order - a coincidental combination could theoretically false-positive, though none has been observed yet
+- **Does not reliably catch novel, semantically-disguised attacks with no code and no recognizable keywords** - tested directly against an independent academic dataset (AgentTrap) with genuinely different attack styles than the campaign used for the "8/8" validation elsewhere in this README, and missed both samples tried (a subtle instruction-blurring attack, and a fake "compliance auditor" that asks in plain prose for secrets to be sent to an external endpoint). This matches independent published research (see BENCHMARK.md) showing static pattern-matching tops out around 13-32% recall on novel/disguised attacks generally - not a Husk-specific flaw, but a real, honest limit of this entire approach. Husk is a fast, free, local first-pass filter, not a complete security boundary.
 
 ## Research this project is grounded in
 
