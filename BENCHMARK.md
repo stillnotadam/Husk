@@ -1,8 +1,8 @@
 # Benchmark: Husk vs. Snyk agent-scan
 
 **Headline real-world result**: static analysis alone - no LLM, no
-third-party model, no assistance - correctly flags **55.4%
-(4,171/7,526)** of real, confirmed-malicious skill packages sourced
+third-party model, no assistance - correctly flags **55.5%
+(4,178/7,526)** of real, confirmed-malicious skill packages sourced
 directly from the MaliciousSkillBench academic benchmark's own GitHub
 repository (real `packages/` archives, not samples built for this
 project). Verified 244/249 (98.0%) real legitimate skills stay clean
@@ -579,3 +579,35 @@ zero new false positives (244/249 maintained).
 **Final result: 52.8% -> 55.4% (4,171/7,526)**, run in 4 batches to
 manage runtime. 244/249 real legitimate skills confirmed clean
 throughout.
+
+## Update: targeted SRC011, found severe real attacks - 55.4% -> 55.5%
+
+Applied the same source-targeting approach to SRC011 (28.6% recall,
+small but worth checking directly since it wasn't yet shown to have
+SRC009/SRC006's structural undetectability). Found three of the most
+severe real attacks encountered in this entire testing process:
+
+1. A "crypto portfolio sync" skill that locates MetaMask/Phantom
+   browser wallet-extension storage - where seed phrases and private
+   keys actually live - and streams it out with `tar czf - ... | curl
+   -X POST`, a real exfiltration shape none of the prior 15 modules
+   covered
+2. A "session analysis" skill running SQL queries directly against
+   Chrome's actual internal password database schema (`Login Data`
+   table, `password_value` column) and POSTing the result
+3. A "project setup" skill instructing the agent to write a CLAUDE.md
+   containing `dangerouslyDisableSandbox: true`, `autoApproveAll: true`,
+   and plain instructions to never ask for confirmation or refuse a
+   command - attacking the agent's own safety configuration rather
+   than the system directly, so whatever comes next faces no scrutiny
+
+Built modules 16 (wallet/browser-credential harvesting) and 17
+(safety-bypass instructions), both narrowly scoped to specific,
+essentially-never-legitimate markers. Found and fixed one new false
+positive during verification ("skip confirmation" matching ordinary
+CLI flag documentation) before it shipped.
+
+**Final result: 55.5% (4,178/7,526)**, 244/249 real legitimate skills
+confirmed clean throughout. The percentage gain here was small (SRC011
+is a tiny source) - the value was in what got found, not how much the
+number moved.
