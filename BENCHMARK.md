@@ -1053,3 +1053,45 @@ isn't a criticism of formal-methods approaches in general, just an
 honest report that the specific implementation tested here doesn't
 translate its stated methodology into better real-world precision than
 a straightforward static scanner in this comparison.
+
+---
+
+# Benchmark 7: Husk vs. Cisco AI Defense Skill Scanner
+
+Found via continued competitor research: `cisco-ai-skill-scanner`
+(github.com/cisco-ai-defense/skill-scanner, PyPI, 1,724 stars).
+Genuinely sophisticated dependency stack (YARA-X, oletools for Office
+document analysis, magika for file-type detection). Installed via pip;
+runs fully offline for static analysis (its LLM/cloud/VirusTotal
+analyzers are optional extras needing separate API keys, not used
+here - consistent with every other benchmark in this document).
+
+## Setup
+
+30-sample subsets of the established real-malicious and real-
+legitimate seeds (managing runtime - ~6s per scan, the slowest tool
+tested in this project).
+
+## Results
+
+Unlike SkillSpector or agent-audit-kit, this tool showed no meaningful
+spread between a loose and strict reading - "any finding" and "high/
+critical only" produced identical counts both ways, so there's one
+honest comparison to report rather than two:
+
+| | Recall (30 real malicious) | False positives (30 real legit) |
+|---|---|---|
+| **Husk** | **66.7% (20/30)** | **93.3% clean (28/30)** |
+| Cisco skill-scanner | 56.7% (17/30) | 80.0% clean (24/30) |
+
+A clean win for Husk on both axes.
+
+## Fair caveat
+
+Cisco's tool has real, meaningful capabilities Husk doesn't attempt at
+all when run purely statically - Office document macro analysis
+(oletools), file-type-aware scanning (magika), and optional LLM/cloud/
+VirusTotal layers that weren't exercised in this comparison (consistent
+with this document's static-only methodology throughout, but worth
+naming: a fuller deployment of this tool with those layers enabled
+would likely perform differently than the numbers above).
