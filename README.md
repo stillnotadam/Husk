@@ -71,6 +71,14 @@ Exit code is `0` for SAFE, `1` for FLAGGED - safe to use directly in CI.
 husk package path/to/skill_package/ --sandbox
 ```
 
+For the strongest isolation level (real filesystem isolation, not just
+network/process), install `bubblewrap` - optional, not a Python
+dependency, and the sandbox degrades gracefully without it:
+
+```bash
+sudo apt-get install bubblewrap   # Debian/Ubuntu
+```
+
 Static analysis and the LLM-review layer both READ a skill before
 anything runs. Some real attacks are specifically built to defeat
 that - logic bombs that stay dormant until a condition is met, so
