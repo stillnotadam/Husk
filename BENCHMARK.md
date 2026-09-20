@@ -1016,3 +1016,40 @@ patterns, OSV.dev live CVE lookup for dependencies) - its real value
 may be greatest as a broad first-pass triage tool for a human reviewer
 to work through, not as an automated pass/fail gate, similar to the
 conclusion reached for agent-audit-kit's loose mode.
+
+---
+
+# Benchmark 6: Husk vs. SkillFortify
+
+Found via continued competitor research: SkillFortify (PyPI, "formal
+verification for agent skill supply chains," 22 supported frameworks).
+Notable marketing claim worth testing directly rather than taking at
+face value: "SkillFortify provides mathematically grounded security
+guarantees... unlike heuristic scanners where absence of findings does
+not mean absence of risk." Installed via `pip install skillfortify`,
+runs fully offline. Requires wrapping a target skill in a specific
+`.claude/skills/<name>/` directory structure to be discovered - a real
+methodology note, not a bug: the standard bare-directory layout used
+throughout this document returned "No skills found" until wrapped
+correctly.
+
+## Setup
+
+60-sample subsets of the established real-malicious and real-
+legitimate seeds (a temp `.claude/skills/` wrapper built per sample).
+
+## Results
+
+| | Recall (60 real malicious) | False positives (60 real legit) |
+|---|---|---|
+| **Husk** | **68.3% (41/60)** | **96.7% clean (58/60)** |
+| SkillFortify (any finding) | 65.0% (39/60) | 65.0% clean (39/60) |
+| SkillFortify (high/critical only) | 63.3% (38/60) | 66.7% clean (40/60) |
+
+A clean, decisive win for Husk on both axes, at both thresholds -
+notably, SkillFortify's real false-positive rate (33-35%) is far
+higher than its "formal verification" framing might suggest. This
+isn't a criticism of formal-methods approaches in general, just an
+honest report that the specific implementation tested here doesn't
+translate its stated methodology into better real-world precision than
+a straightforward static scanner in this comparison.
