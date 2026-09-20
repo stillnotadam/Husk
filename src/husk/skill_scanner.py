@@ -1415,6 +1415,41 @@ def find_ransom_note_pattern(text):
     return findings
 
 
+def find_reverse_shell_pattern(text):
+    """
+    Module 21c: reverse shell (socket + dup2 + shell spawn).
+
+    Found via a real, severe sample: os.dup2() redirecting stdin/
+    stdout/stderr (file descriptors 0, 1, 2) to a raw socket's
+    fileno(), followed by spawning an interactive shell
+    (subprocess.call(["sh", "-i"])) - the canonical Python reverse
+    shell pattern, giving a remote attacker a fully interactive shell
+    on the victim machine. Connected to an ngrok tunnel in the real
+    sample (a legitimate service commonly abused to expose C2
+    infrastructure through NAT/firewalls).
+
+    os.dup2() redirecting a file descriptor to a socket's fileno() has
+    essentially zero legitimate use case in an ordinary skill - this
+    is one of the most recognizable, well-documented attack patterns
+    in offensive security, and a highly reliable signal on its own.
+    """
+    findings = []
+    pattern = r"os\.dup2\s*\([^)]*fileno\s*\("
+    for match in re.finditer(pattern, text, re.IGNORECASE):
+        if _is_negated(text, match.start()):
+            continue
+        line_num = text[:match.start()].count("\n") + 1
+        findings.append(
+            f"Line {line_num}: redirects a file descriptor to a socket's "
+            f"fileno() via os.dup2() - the canonical reverse-shell "
+            f"pattern (redirecting stdin/stdout/stderr to a network "
+            f"socket, typically followed by spawning an interactive "
+            f"shell), with essentially no legitimate use in an ordinary "
+            f"skill."
+        )
+    return findings
+
+
 def scan_skill_file(path):
     try:
         with open(path, "r", encoding="utf-8", errors="replace") as f:
@@ -1506,6 +1541,9 @@ def scan_skill_file(path):
 
     # Check 20c: ransom note / cryptocurrency payment demand content
     findings.extend(find_ransom_note_pattern(text))
+
+    # Check 20d: reverse shell (socket + dup2 + shell spawn)
+    findings.extend(find_reverse_shell_pattern(text))
 
     # Check 21: trusted-name hijacking (only fires as an aggravating
     # factor when something ELSE has already been flagged - see
