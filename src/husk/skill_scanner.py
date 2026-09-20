@@ -885,6 +885,32 @@ def find_exfil_to_raw_ip(text):
             f"target is a well-known indicator of C2 (command-and-control) "
             f"infrastructure."
         )
+
+    # Also catch bare IP literals used with lower-level connection APIs
+    # that don't take a full URL string (http.client.HTTPConnection,
+    # socket.connect) - found via a real sample that downloaded a
+    # dropper payload this way specifically to dodge URL-pattern-only
+    # detection: CONFIG_IP = "145.249.104.71"; then
+    # http.client.HTTPConnection(CONFIG_IP). No "http://" prefix ever
+    # appears anywhere in the file for this to match against.
+    bare_ip_pattern = r'(?<![\d.])(\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3})(?![\d.])'
+    connection_context = r"(HTTPConnection|HTTPSConnection|\.connect\s*\(|socket\.)"
+    for match in re.finditer(bare_ip_pattern, text):
+        if _is_private_ip(match.group(1)):
+            continue
+        window_start = max(0, match.start() - 300)
+        window_end = min(len(text), match.end() + 300)
+        window = text[window_start:window_end]
+        if re.search(connection_context, window):
+            line_num = text[:match.start()].count("\n") + 1
+            findings.append(
+                f"Line {line_num}: bare IP address ({match.group(1)}) used "
+                f"near a low-level network connection call - the same C2 "
+                f"indicator as a hardcoded IP URL, but via an API that "
+                f"takes just the host rather than a full URL string."
+            )
+            break  # one hit is enough signal for this sub-pattern
+
     return findings
 
 
