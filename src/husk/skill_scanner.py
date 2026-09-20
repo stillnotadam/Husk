@@ -1728,6 +1728,70 @@ def find_dns_covert_channel(text):
     return findings
 
 
+def find_sql_injection_pattern(text):
+    """
+    Module 27: SQL injection via string interpolation.
+
+    Technique inspiration: agent-audit's AGENT-041 rule (ASI-02,
+    CWE-89). SQL queries built with f-strings, .format(), or string
+    concatenation instead of parameterized queries allow SQL injection
+    through any interpolated value that traces back to untrusted input.
+    Deliberately narrow: only fires when an f-string or .format() call
+    is passed directly to a database execute-family method, since
+    that's a precise, low-false-positive shape - ordinary string
+    building elsewhere in a file is far too common to flag generically.
+    """
+    findings = []
+    pattern = re.compile(
+        r"\.(execute|executemany|executescript|raw)\s*\(\s*"
+        r"(f[\"']|[\"'][^\"']*\{|[\"'][^\"']*\"\s*\+|[\"'][^\"']*'\s*\+)",
+        re.IGNORECASE,
+    )
+    for match in pattern.finditer(text):
+        if _is_negated(text, match.start()):
+            continue
+        line_num = text[:match.start()].count("\n") + 1
+        findings.append(
+            f"Line {line_num}: SQL query built with an f-string/string-"
+            f"concatenation passed directly to "
+            f"'{match.group(1)}()' ('{match.group(0)[:50]}') instead of "
+            f"a parameterized query - allows SQL injection through any "
+            f"interpolated value that traces back to untrusted input."
+        )
+    return findings
+
+
+def find_sensitive_data_logging(text):
+    """
+    Module 28: sensitive data logged in output.
+
+    Technique inspiration: agent-audit's AGENT-052 rule (ASI-09,
+    CWE-532). A logging or print statement whose f-string/format
+    interpolates a variable whose NAME suggests a credential (password,
+    token, api_key, secret) - a common accidental info-leak pattern:
+    the value ends up in log files, which are often less carefully
+    protected than the credential's original source.
+    """
+    findings = []
+    pattern = re.compile(
+        r"(?:log(?:ger)?\.(?:info|debug|warning|error)|print)\s*\(\s*f[\"'][^\"']*\{"
+        r"[\w.]*\b(password|passwd|api_key|apikey|secret|token|access_key)\b",
+        re.IGNORECASE,
+    )
+    for match in pattern.finditer(text):
+        if _is_negated(text, match.start()):
+            continue
+        line_num = text[:match.start()].count("\n") + 1
+        findings.append(
+            f"Line {line_num}: logs a variable whose name suggests a "
+            f"credential ('{match.group(1)}') via an f-string "
+            f"('{match.group(0)[:60]}') - a common accidental info-leak "
+            f"pattern, since log files are often less carefully "
+            f"protected than the credential's original source."
+        )
+    return findings
+
+
 def scan_skill_file(path):
     try:
         with open(path, "r", encoding="utf-8", errors="replace") as f:
@@ -1840,6 +1904,12 @@ def scan_skill_file(path):
 
     # Check 26: DNS-based covert-channel exfiltration
     findings.extend(find_dns_covert_channel(text))
+
+    # Check 27: SQL injection via string interpolation
+    findings.extend(find_sql_injection_pattern(text))
+
+    # Check 28: sensitive data logged in output
+    findings.extend(find_sensitive_data_logging(text))
 
     # Check 20e: self-incriminating attack-description language
     # REMOVED after real-world testing: "attacker-controlled" collided
