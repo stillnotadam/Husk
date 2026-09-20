@@ -43,13 +43,18 @@ statement returns tainted data, and propagates that taint to whatever
 variable captures the result at any call site elsewhere in the file
 (including nested inside other calls, e.g. `json.dumps(_gather())`).
 
-This is still not full inter-procedural tracking - taint does NOT flow
-INTO a function through its parameters (if you call
-`process(secret_value)`, the tracker does not know `process`'s
-parameter is now tainted inside that function), and it does not follow
-calls across module/file boundaries. It closes the specific "gather
-then return, call then send" pattern found in real testing, not the
-general case.
+This is still not full inter-procedural tracking, but a real gap was
+closed since: taint now DOES flow INTO a function through its
+parameters, for the specific, common shape of a small helper that
+takes a value and immediately uses it in a sink (e.g.
+`def leak(data): requests.post(url, data=data)`, called as
+`leak(stolen_value)`). This does NOT re-trace taint propagating deeper
+inside a callee's own body (if the callee reassigns the parameter to
+another variable before using it, that's outside this check's scope),
+and it does not follow calls across module/file boundaries. It closes
+the specific "gather then return, call then send" and "helper takes a
+tainted value and sends it" patterns found in real testing, not the
+fully general case of arbitrary-depth cross-function data flow.
 """
 
 import ast
@@ -207,6 +212,52 @@ def _list_contains_credential_marker(list_node):
     return False
 
 
+def _collect_function_defs(tree):
+    """
+    Returns {func_name: (param_names, body)} for every function
+    definition anywhere in the tree, collected in one pass up front.
+    This lets a call site check what happens inside a called function
+    without needing the call to occur after the definition in file
+    order (Python itself doesn't require that either, for top-level
+    functions).
+    """
+    defs = {}
+    for node in ast.walk(tree):
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            param_names = [a.arg for a in node.args.args]
+            defs[node.name] = (param_names, node.body)
+    return defs
+
+
+def _function_sinks_on_param(body, param_name):
+    """
+    Returns a sink description if the function body (a list of
+    statements) contains a sink call using param_name directly in its
+    arguments. Deliberately scoped to the simplest, most common real
+    shape - a small helper that takes a value and immediately sends/
+    executes it - not a full re-trace of taint propagation inside the
+    callee (that would need recursive, mutually-aware tracking across
+    function boundaries in both directions at once; this is a
+    targeted, real improvement over having no parameter-flow tracking
+    at all, not a claim of complete inter-procedural analysis).
+    """
+    for stmt in body:
+        for node in ast.walk(stmt):
+            if isinstance(node, ast.Call):
+                is_sink, sink_desc = _is_sink_call(node)
+                if not is_sink:
+                    continue
+                names_in_args = set()
+                for arg in node.args:
+                    names_in_args |= _names_used_in(arg)
+                for kw in node.keywords:
+                    if kw.value is not None:
+                        names_in_args |= _names_used_in(kw.value)
+                if param_name in names_in_args:
+                    return sink_desc
+    return None
+
+
 def analyze_taint_flows(source_code, filename="<skill script>"):
     """
     Parses Python source and traces sensitive-source-to-dangerous-sink
@@ -227,6 +278,10 @@ def analyze_taint_flows(source_code, filename="<skill script>"):
         return []
 
     findings = []
+    # func_name -> (param_names, body) for every function definition in
+    # the file, collected up front so parameter-taint checks below
+    # don't depend on call-site/definition order.
+    function_defs = _collect_function_defs(tree)
     # var_name -> description of why it's tainted
     tainted = {}
     # var_name -> True, for variables assigned a list literal containing
@@ -362,6 +417,54 @@ def analyze_taint_flows(source_code, filename="<skill script>"):
                             line=getattr(node, "lineno", 0),
                             source_desc=tainted[var_name],
                             sink_desc=sink_desc,
+                            var_name=var_name,
+                        ))
+
+            # Taint flowing INTO a function through its parameters, not
+            # just OUT through return values (the earlier limitation -
+            # see the module docstring's "still not full inter-
+            # procedural tracking" note, now partially closed). If a
+            # tainted value is passed to a LOCALLY DEFINED function,
+            # and that function's own body directly uses the matching
+            # parameter in a sink call, report the flow at this call
+            # site.
+            for node in ast.walk(stmt):
+                if not isinstance(node, ast.Call):
+                    continue
+                called_name = _call_name(node)
+                if called_name not in function_defs:
+                    continue
+                param_names, func_body = function_defs[called_name]
+                for i, arg in enumerate(node.args):
+                    if i >= len(param_names):
+                        continue
+                    tainted_arg = _names_used_in(arg) & tainted.keys()
+                    if not tainted_arg:
+                        continue
+                    sink_desc = _function_sinks_on_param(func_body, param_names[i])
+                    if sink_desc:
+                        var_name = next(iter(tainted_arg))
+                        findings.append(TaintFinding(
+                            line=getattr(node, "lineno", 0),
+                            source_desc=tainted[var_name],
+                            sink_desc=f"{sink_desc} (via parameter "
+                                      f"'{param_names[i]}' of '{called_name}()')",
+                            var_name=var_name,
+                        ))
+                for kw in node.keywords:
+                    if kw.arg not in param_names or kw.value is None:
+                        continue
+                    tainted_arg = _names_used_in(kw.value) & tainted.keys()
+                    if not tainted_arg:
+                        continue
+                    sink_desc = _function_sinks_on_param(func_body, kw.arg)
+                    if sink_desc:
+                        var_name = next(iter(tainted_arg))
+                        findings.append(TaintFinding(
+                            line=getattr(node, "lineno", 0),
+                            source_desc=tainted[var_name],
+                            sink_desc=f"{sink_desc} (via parameter "
+                                      f"'{kw.arg}' of '{called_name}()')",
                             var_name=var_name,
                         ))
 
