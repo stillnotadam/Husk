@@ -15,7 +15,7 @@ from .skill_scanner import scan_skill_file
 from .package_scanner import scan_package
 from .pickle_scanner import scan_file as scan_pickle_file
 from .llm_review import review_skill_with_llm
-from .sandbox import sandbox_run_python_script
+from .sandbox import sandbox_run_script
 
 
 def _print_result(verdict, findings, label):
@@ -58,13 +58,15 @@ def cmd_package(args):
 
     if args.sandbox:
         import glob
-        print("--- Basic dynamic sandbox (actually RUNS Python scripts - see README.md for real limits) ---")
-        py_scripts = glob.glob(os.path.join(args.path, "**", "*.py"), recursive=True)
-        if not py_scripts:
-            print("  No Python scripts found to sandbox.\n")
-        for script in py_scripts:
+        print("--- Basic dynamic sandbox (actually RUNS scripts - Python/JS/shell - see README.md for real limits) ---")
+        scripts = []
+        for ext in ("*.py", "*.js", "*.sh"):
+            scripts += glob.glob(os.path.join(args.path, "**", ext), recursive=True)
+        if not scripts:
+            print("  No sandboxable scripts (Python/JS/shell) found.\n")
+        for script in scripts:
             print(f"  Running: {os.path.relpath(script, args.path)}")
-            result = sandbox_run_python_script(script)
+            result = sandbox_run_script(script)
             if result["findings"]:
                 exit_code = 1
                 for f in result["findings"]:
@@ -105,7 +107,8 @@ def main():
     p_package.add_argument("path", help="Path to the skill package directory")
     p_package.add_argument(
         "--sandbox", action="store_true",
-        help="Opt-in: ACTUALLY RUNS the package's Python scripts in a "
+        help="Opt-in: ACTUALLY RUNS the package's scripts (Python, "
+             "JavaScript, shell) in a "
              "restricted, observed environment (timeout, CPU/memory limits, "
              "filesystem-diff observation) to catch logic-bomb/delayed-"
              "activation behavior no static or LLM read can see. This is a "

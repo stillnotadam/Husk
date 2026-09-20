@@ -98,7 +98,10 @@ or resource-limits-only as a last resort) - every result reports
 exactly which level actually ran via `isolation_level`, never silently
 claiming protection that isn't there. Observation is
 limited to exit code, stdout/stderr, and a filesystem diff - no deep
-syscall tracing. Only Python scripts are sandboxed. A clean run means
+syscall tracing. Python, JavaScript, and shell scripts are sandboxed
+(the languages an interpreter is actually verified available for in
+the running environment - an unsupported or missing interpreter is
+skipped cleanly, not silently ignored or crashed on). A clean run means
 nothing bad happened *this time*, under *these* inputs - not a
 guarantee the script is safe.
 

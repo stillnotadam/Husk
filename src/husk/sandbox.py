@@ -93,16 +93,25 @@ MAX_PROCESSES = 10
 WALL_CLOCK_TIMEOUT_SECONDS = 8
 
 
-def _apply_resource_limits():
+def _apply_resource_limits(memory_limit_mb=MEMORY_LIMIT_MB):
     """
     Runs in the child process (via subprocess's preexec_fn) before the
     sandboxed script starts. Sets hard limits so a runaway or malicious
     script can't consume unbounded CPU, memory, or process slots. Kept
     independent of, and in addition to, whichever namespace isolation
     level is used below.
+
+    memory_limit_mb is the RLIMIT_AS (virtual address space) ceiling -
+    parameterized because Node's V8 engine needs a much higher ceiling
+    here than Python does (V8 reserves several GB of virtual address
+    space upfront regardless of actual usage; Python's virtual and
+    actual usage track closely together). This is a generous backstop
+    against truly unbounded allocation, not the primary memory control
+    for Node specifically - that's --max-old-space-size in
+    LANGUAGE_INTERPRETERS, which caps real heap usage.
     """
     resource.setrlimit(resource.RLIMIT_CPU, (CPU_TIME_LIMIT_SECONDS, CPU_TIME_LIMIT_SECONDS))
-    mem_bytes = MEMORY_LIMIT_MB * 1024 * 1024
+    mem_bytes = memory_limit_mb * 1024 * 1024
     resource.setrlimit(resource.RLIMIT_AS, (mem_bytes, mem_bytes))
     resource.setrlimit(resource.RLIMIT_NPROC, (MAX_PROCESSES, MAX_PROCESSES))
 
@@ -169,12 +178,52 @@ def _unshare_isolation_works():
     return _unshare_isolation_works._cached
 
 
+# Interpreter command for each supported script extension. Node and
+# bash/sh are genuinely available in most real environments (verified
+# directly here rather than assumed) alongside Python, which already
+# had sandbox support. Ruby is listed for completeness but will simply
+# fail to execute (handled gracefully, same as any missing interpreter)
+# if it isn't installed - this module never assumes an interpreter
+# exists without checking.
+LANGUAGE_INTERPRETERS = {
+    ".py": [sys.executable, "-I"],
+    # --max-old-space-size caps Node's actual heap usage in MB - the
+    # right mechanism for V8-based runtimes. Found necessary via
+    # testing: Node's V8 engine reserves several GB of VIRTUAL address
+    # space upfront even for a trivial script (a well-known V8
+    # characteristic, unrelated to actual memory use), which immediately
+    # crashed with "Fatal process out of memory" under the same
+    # RLIMIT_AS (virtual address space) limit that works fine for
+    # Python. Real usage stays low; only the upfront virtual
+    # reservation is huge, so RLIMIT_AS is the wrong tool for Node
+    # specifically - see _apply_resource_limits below for the matching
+    # fix on the other side.
+    ".js": ["node", "--max-old-space-size=256"],
+    ".sh": ["bash"],
+    ".rb": ["ruby"],
+}
+
+
+def _interpreter_for(script_abs_path):
+    """Returns the interpreter command list for a script's extension,
+    or None if the extension isn't one this sandbox supports running."""
+    ext = os.path.splitext(script_abs_path)[1].lower()
+    return LANGUAGE_INTERPRETERS.get(ext)
+
+
 def _build_sandbox_command(script_abs_path, workdir):
     """
     Builds the command to run the sandboxed script, using the
     strongest isolation level actually verified available. Returns
     (command_list, isolation_level_string).
     """
+    interpreter = _interpreter_for(script_abs_path)
+    if interpreter is None:
+        # No supported interpreter for this extension - the caller
+        # (sandbox_run_script) checks this before ever getting here,
+        # this is just a defensive fallback.
+        interpreter = [sys.executable, "-I"]
+
     if _bwrap_isolation_works():
         script_dir = os.path.dirname(script_abs_path)
         cmd = ["bwrap"]
@@ -193,24 +242,42 @@ def _build_sandbox_command(script_abs_path, workdir):
             "--die-with-parent",
             "--chdir", workdir,
             "--",
-            sys.executable, "-I", script_abs_path,
-        ]
+        ] + interpreter + [script_abs_path]
         return cmd, "bubblewrap (network + process + filesystem isolation)"
 
     if _unshare_isolation_works():
         return (
-            ["unshare", "--net", "--pid", "--mount", "--fork", "--",
-             sys.executable, "-I", script_abs_path],
+            ["unshare", "--net", "--pid", "--mount", "--fork", "--"]
+            + interpreter + [script_abs_path],
             "unshare (network + process isolation only)",
         )
 
-    return ([sys.executable, "-I", script_abs_path], "none (resource limits only)")
+    return (interpreter + [script_abs_path], "none (resource limits only)")
+
+
+def sandbox_run_script(script_path, timeout=WALL_CLOCK_TIMEOUT_SECONDS):
+    """
+    Runs a single script (Python, JavaScript, or shell - see
+    LANGUAGE_INTERPRETERS) in a restricted temp working directory and
+    reports what actually happened. This is the general entry point;
+    sandbox_run_python_script (below) is kept as a backward-compatible
+    alias for the Python-only version used by earlier tests/CLI code.
+    """
+    return _sandbox_run(script_path, timeout)
 
 
 def sandbox_run_python_script(script_path, timeout=WALL_CLOCK_TIMEOUT_SECONDS):
+    """Backward-compatible alias - Python was the only supported
+    language when this name was introduced. Now just calls the general
+    multi-language runner; kept as its own name since earlier tests and
+    the CLI already reference it."""
+    return _sandbox_run(script_path, timeout)
+
+
+def _sandbox_run(script_path, timeout=WALL_CLOCK_TIMEOUT_SECONDS):
     """
-    Runs a single Python script in a restricted temp working directory
-    and reports what actually happened.
+    Runs a single script in a restricted temp working directory and
+    reports what actually happened.
 
     Returns a dict:
     {
@@ -236,6 +303,24 @@ def sandbox_run_python_script(script_path, timeout=WALL_CLOCK_TIMEOUT_SECONDS):
         "wall_clock_seconds": 0.0, "findings": [], "isolation_level": "none",
     }
 
+    script_abs_path_check = os.path.abspath(script_path)
+    interpreter_check = _interpreter_for(script_abs_path_check)
+    if interpreter_check is None:
+        result["findings"].append(
+            f"Sandbox has no supported interpreter for this file type "
+            f"({os.path.splitext(script_path)[1] or 'no extension'}) - "
+            f"only Python, JavaScript, and shell scripts are sandboxed "
+            f"in this version. Skipped, not an error."
+        )
+        return result
+    if shutil.which(interpreter_check[0]) is None:
+        result["findings"].append(
+            f"Sandbox requires '{interpreter_check[0]}' to run this "
+            f"script type, but it isn't installed in this environment. "
+            f"Skipped gracefully rather than failing."
+        )
+        return result
+
     with tempfile.TemporaryDirectory(prefix="husk_sandbox_") as workdir:
         before = _snapshot_dir(workdir)
         script_abs_path = os.path.abspath(script_path)
@@ -249,6 +334,10 @@ def sandbox_run_python_script(script_path, timeout=WALL_CLOCK_TIMEOUT_SECONDS):
         try:
             command, isolation_level = _build_sandbox_command(script_abs_path, workdir)
             result["isolation_level"] = isolation_level
+            # Node needs a much higher RLIMIT_AS ceiling (V8's upfront
+            # virtual reservation) - see _apply_resource_limits' docstring.
+            ext = os.path.splitext(script_abs_path)[1].lower()
+            as_limit_mb = 4096 if ext == ".js" else MEMORY_LIMIT_MB
             proc = subprocess.run(
                 command,
                 cwd=workdir,
@@ -256,7 +345,7 @@ def sandbox_run_python_script(script_path, timeout=WALL_CLOCK_TIMEOUT_SECONDS):
                 capture_output=True,
                 text=True,
                 timeout=timeout,
-                preexec_fn=_apply_resource_limits,
+                preexec_fn=lambda: _apply_resource_limits(as_limit_mb),
             )
             result["executed"] = True
             result["exit_code"] = proc.returncode

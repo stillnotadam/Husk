@@ -7,10 +7,14 @@ of what this basic sandbox does and does not do.
 """
 
 import os
+import shutil
 import sys
+import tempfile
+
+import pytest
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "src"))
-from husk.sandbox import sandbox_run_python_script  # noqa: E402
+from husk.sandbox import sandbox_run_python_script, sandbox_run_script  # noqa: E402
 
 FIXTURE_DIR = os.path.join(os.path.dirname(__file__), "sandbox_fixtures")
 
@@ -91,6 +95,45 @@ def test_filesystem_isolation_is_real_when_bubblewrap_is_available():
             f"filesystem isolation requires bubblewrap. Expected on "
             f"systems without it installed, but worth knowing."
         )
+
+
+def test_javascript_is_sandboxed_with_correct_memory_handling():
+    """
+    Real multi-language support: verifies JS execution and file-
+    creation detection work correctly, including the V8-specific
+    memory-limit fix (Node's virtual address space reservation needs a
+    different RLIMIT_AS ceiling than Python - see sandbox.py's
+    LANGUAGE_INTERPRETERS/_apply_resource_limits docstrings for the
+    full story of why this was necessary)."""
+    result = sandbox_run_script(os.path.join(FIXTURE_DIR, "creates_unexpected_file.js"))
+    if shutil.which("node") is None:
+        pytest.skip("node not installed in this environment")
+    assert result["executed"] is True
+    assert result["exit_code"] == 0
+    assert "unexpected_marker_js.txt" in result["files_created"]
+
+
+def test_shell_scripts_are_sandboxed():
+    """Real multi-language support: shell scripts run correctly through
+    the same sandbox."""
+    result = sandbox_run_script(os.path.join(FIXTURE_DIR, "normal_clean_script.sh"))
+    assert result["executed"] is True
+    assert result["exit_code"] == 0
+    assert "Processing complete" in result["stdout"]
+
+
+def test_unsupported_extension_degrades_gracefully():
+    """A file type with no configured interpreter (or one that isn't
+    actually installed) must be skipped cleanly, not crash."""
+    with tempfile.NamedTemporaryFile(suffix=".rb", delete=False) as f:
+        f.write(b"puts 'hello'")
+        rb_path = f.name
+    try:
+        result = sandbox_run_script(rb_path)
+        assert result["executed"] is False
+        assert len(result["findings"]) == 1
+    finally:
+        os.unlink(rb_path)
 
 
 def test_never_raises_on_a_nonexistent_script():
