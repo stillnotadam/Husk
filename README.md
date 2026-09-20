@@ -98,11 +98,17 @@ or resource-limits-only as a last resort) - every result reports
 exactly which level actually ran via `isolation_level`, never silently
 claiming protection that isn't there. Observation is
 limited to exit code, stdout/stderr, and a filesystem diff - no deep
-syscall tracing. Python, JavaScript, shell, and Ruby scripts are
-sandboxed
-(the languages an interpreter is actually verified available for in
-the running environment - an unsupported or missing interpreter is
-skipped cleanly, not silently ignored or crashed on). A clean run means
+syscall tracing. Python, JavaScript, shell, Ruby, Rust, and Go scripts
+are sandboxed (Rust/Go are compiled to a binary first, outside the
+sandbox - the compiler itself needs broader access than a script
+should get - then only the resulting binary's runtime behavior is
+sandboxed; only standalone single-file source with no external crate/
+module dependencies compiles this way, a real v1 limitation reported
+plainly as a compilation note, not silently skipped or treated as a
+security finding either way - the languages an interpreter/compiler is
+actually verified available for in the running environment; an
+unsupported or missing one is skipped cleanly, not silently ignored or
+crashed on). A clean run means
 nothing bad happened *this time*, under *these* inputs - not a
 guarantee the script is safe.
 

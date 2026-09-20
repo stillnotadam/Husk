@@ -150,6 +150,51 @@ def test_unsupported_extension_degrades_gracefully():
         os.unlink(php_path)
 
 
+def test_go_is_compiled_and_sandboxed():
+    """Compiled-language support: Go source is compiled to a binary
+    (outside the sandbox) and the resulting binary's runtime behavior
+    is sandboxed. Verifies file-creation detection works, and that the
+    compiled binary itself doesn't show up as a false "file created by
+    the script" (a real bug found and fixed during development)."""
+    if shutil.which("go") is None:
+        pytest.skip("go not installed in this environment")
+    result = sandbox_run_script(os.path.join(FIXTURE_DIR, "creates_unexpected_file.go"), timeout=30)
+    assert result["executed"] is True
+    assert result["exit_code"] == 0
+    assert "unexpected_marker_go.txt" in result["files_created"]
+    assert "husk_sandbox_compiled_binary" not in result["files_created"]
+
+
+def test_rust_is_compiled_and_sandboxed():
+    """Compiled-language support: same as the Go test, for Rust."""
+    if shutil.which("rustc") is None:
+        pytest.skip("rustc not installed in this environment")
+    result = sandbox_run_script(os.path.join(FIXTURE_DIR, "creates_unexpected_file.rs"), timeout=30)
+    assert result["executed"] is True
+    assert result["exit_code"] == 0
+    assert "unexpected_marker_rs.txt" in result["files_created"]
+    assert "husk_sandbox_compiled_binary" not in result["files_created"]
+
+
+def test_compilation_failure_degrades_gracefully():
+    """A real, honest v1 limitation: a source file with external crate/
+    module dependencies won't compile standalone. Must be reported
+    plainly as a compilation issue, never crash or be silently
+    swallowed as a false 'safe' result."""
+    if shutil.which("rustc") is None:
+        pytest.skip("rustc not installed in this environment")
+    with tempfile.NamedTemporaryFile(suffix=".rs", mode="w", delete=False) as f:
+        f.write("use some_external_crate::Thing;\nfn main() { Thing::new(); }")
+        rs_path = f.name
+    try:
+        result = sandbox_run_script(rs_path, timeout=30)
+        assert result["executed"] is False
+        assert len(result["findings"]) == 1
+        assert "compile" in result["findings"][0].lower()
+    finally:
+        os.unlink(rs_path)
+
+
 def test_never_raises_on_a_nonexistent_script():
     """The sandbox must degrade gracefully, never crash the caller."""
     result = sandbox_run_python_script("/nonexistent/path/does_not_exist.py")

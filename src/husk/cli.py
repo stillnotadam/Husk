@@ -58,12 +58,12 @@ def cmd_package(args):
 
     if args.sandbox:
         import glob
-        print("--- Basic dynamic sandbox (actually RUNS scripts - Python/JS/shell/Ruby - see README.md for real limits) ---")
+        print("--- Basic dynamic sandbox (actually RUNS scripts - Python/JS/shell/Ruby/Rust/Go - see README.md for real limits) ---")
         scripts = []
-        for ext in ("*.py", "*.js", "*.sh", "*.rb"):
+        for ext in ("*.py", "*.js", "*.sh", "*.rb", "*.rs", "*.go"):
             scripts += glob.glob(os.path.join(args.path, "**", ext), recursive=True)
         if not scripts:
-            print("  No sandboxable scripts (Python/JS/shell/Ruby) found.\n")
+            print("  No sandboxable scripts (Python/JS/shell/Ruby/Rust/Go) found.\n")
         for script in scripts:
             print(f"  Running: {os.path.relpath(script, args.path)}")
             result = sandbox_run_script(script)

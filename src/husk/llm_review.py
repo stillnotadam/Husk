@@ -136,7 +136,13 @@ def review_skill_with_llm(content, api_key=None, model="claude-sonnet-5"):
         prompt = REVIEW_PROMPT_TEMPLATE.format(content=content[:15000])
         body = json.dumps({
             "model": model,
-            "max_tokens": 600,
+            # Raised from 600 after live testing (Tier 4.4) found
+            # occasional truncation on longer/complex files even at
+            # that level. temperature=0 for more consistent structured
+            # (JSON) output - less relevant for creative tasks, directly
+            # useful here where we need the exact same schema every time.
+            "max_tokens": 1000,
+            "temperature": 0,
             "messages": [{"role": "user", "content": prompt}],
         }).encode("utf-8")
 
@@ -157,12 +163,37 @@ def review_skill_with_llm(content, api_key=None, model="claude-sonnet-5"):
             if block.get("type") == "text"
         ).strip()
 
+        if not text:
+            raise ValueError(
+                "API response contained no text content block "
+                f"(stop_reason={data.get('stop_reason')!r})"
+            )
+
         # Models occasionally wrap JSON in a code fence despite instructions;
         # strip that defensively rather than failing the whole review.
         if text.startswith("```"):
             text = text.strip("`").lstrip("json").strip()
 
-        parsed = json.loads(text)
+        try:
+            parsed = json.loads(text)
+        except json.JSONDecodeError:
+            # Real failures found via live testing (Tier 4.4): occasional
+            # truncation even at a generous max_tokens, or stray text
+            # around the JSON object despite instructions. Fall back to
+            # extracting the substring between the first '{' and the
+            # last '}' before giving up entirely - this recovers cleanly
+            # from both "extra prose around valid JSON" and, since we
+            # search for the LAST '}', from a response that has trailing
+            # junk after an otherwise-complete object. It does NOT
+            # recover a response truncated mid-object (no closing '}'
+            # exists anywhere) - that case still surfaces as a clear,
+            # honest error rather than a wrong guess.
+            start = text.find("{")
+            end = text.rfind("}")
+            if start == -1 or end == -1 or end <= start:
+                raise
+            parsed = json.loads(text[start:end + 1])
+
         return {
             "available": True,
             "verdict": parsed.get("verdict"),

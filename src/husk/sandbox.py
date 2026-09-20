@@ -203,41 +203,102 @@ LANGUAGE_INTERPRETERS = {
     ".rb": ["ruby"],
 }
 
+# Compiled languages need a different pipeline: compile to a binary
+# FIRST, then run that binary through the same sandboxed-execution
+# mechanism. Honest scope note: compilation itself happens OUTSIDE the
+# sandbox (a compiler needs far broader filesystem/toolchain access
+# than a script should ever get) - only the resulting BINARY's runtime
+# behavior is sandboxed, not the compilation process. Also honest:
+# this only handles a single standalone source file with no external
+# crate/module dependencies (rustc file.rs / go build file.go directly)
+# - a real multi-file crate or module with a Cargo.toml/go.mod will
+# fail to compile standalone, which is reported as a compilation
+# failure (not a security finding either way), not silently skipped.
+COMPILERS = {
+    ".rs": ["rustc", "-O"],
+    ".go": ["go", "build", "-o"],
+}
+
+
+def _compile_if_needed(script_abs_path, workdir):
+    """
+    For Rust/Go source files, compiles to a binary in workdir and
+    returns its path. Returns None (with a finding appended to the
+    passed-in findings-collecting side effect via the return tuple) if
+    compilation isn't needed (returns the original path unchanged) or
+    fails (returns None, with the compiler's own error as the reason -
+    most commonly because the file has external dependencies that
+    can't be resolved standalone, an expected v1 limitation, not a
+    bug). Returns (path_or_none, note_or_none).
+    """
+    ext = os.path.splitext(script_abs_path)[1].lower()
+    compiler = COMPILERS.get(ext)
+    if compiler is None:
+        return script_abs_path, None
+
+    binary_path = os.path.join(workdir, "husk_sandbox_compiled_binary")
+    try:
+        if ext == ".rs":
+            cmd = compiler + ["-o", binary_path, script_abs_path]
+        else:  # .go
+            cmd = compiler + [binary_path, script_abs_path]
+        proc = subprocess.run(cmd, capture_output=True, text=True, timeout=30)
+        if proc.returncode != 0:
+            return None, (
+                f"Could not compile {ext} source for dynamic analysis "
+                f"(most likely external crate/module dependencies not "
+                f"resolvable standalone - a real v1 limitation, not a "
+                f"security assessment either way): "
+                f"{proc.stderr.strip()[:300]}"
+            )
+        os.chmod(binary_path, 0o755)
+        return binary_path, None
+    except Exception as e:
+        return None, f"Compilation step failed: {e}"
+
 
 def _interpreter_for(script_abs_path):
-    """Returns the interpreter command list for a script's extension,
-    or None if the extension isn't one this sandbox supports running."""
+    """Returns the interpreter command list for a script's extension
+    ([] for a compiled-language source, meaning "compile then run the
+    resulting binary directly, no interpreter prefix"), or None if the
+    extension isn't one this sandbox supports at all."""
     ext = os.path.splitext(script_abs_path)[1].lower()
+    if ext in COMPILERS:
+        return []
     return LANGUAGE_INTERPRETERS.get(ext)
 
 
-def _build_sandbox_command(script_abs_path, workdir):
+def _build_sandbox_command(script_abs_path, workdir, interpreter):
     """
     Builds the command to run the sandboxed script, using the
-    strongest isolation level actually verified available. Returns
-    (command_list, isolation_level_string).
+    strongest isolation level actually verified available. Takes the
+    already-determined interpreter (rather than re-deriving it from
+    script_abs_path) because for a compiled-language binary,
+    script_abs_path has no recognizable extension at all - re-deriving
+    it here previously defaulted back to Python, a real bug found
+    during testing (a compiled Go binary was being run as
+    `python3 -I <binary>`, immediately failing with a syntax error on
+    the binary's raw bytes). Returns (command_list, isolation_level_string).
     """
-    interpreter = _interpreter_for(script_abs_path)
-    if interpreter is None:
-        # No supported interpreter for this extension - the caller
-        # (sandbox_run_script) checks this before ever getting here,
-        # this is just a defensive fallback.
-        interpreter = [sys.executable, "-I"]
-
     if _bwrap_isolation_works():
         script_dir = os.path.dirname(script_abs_path)
         cmd = ["bwrap"]
         for d in SYSTEM_DIRS_TO_BIND:
             cmd += ["--ro-bind", d, d]
+        cmd += ["--bind", workdir, workdir]
+        # The script file itself usually lives outside every other
+        # bound directory (e.g. wherever the skill package was
+        # extracted to) - without binding its own directory read-only,
+        # bwrap can't see it to execute it at all. Found via testing:
+        # this was the real cause of every sandboxed run silently
+        # producing empty output. EXCEPTION: a compiled binary lives
+        # INSIDE workdir itself (already bound read-write above) -
+        # adding a second, read-only bind for the same path would
+        # conflict with and override the read-write one, breaking
+        # file-creation detection for compiled languages specifically.
+        if script_dir != workdir:
+            cmd += ["--ro-bind", script_dir, script_dir]
         cmd += [
-            "--bind", workdir, workdir,
-            # The script file itself lives outside every other bound
-            # directory (e.g. wherever the skill package was extracted
-            # to) - without binding its own directory read-only, bwrap
-            # can't see it to execute it at all. Found via testing: this
-            # was the real cause of every sandboxed run silently
-            # producing empty output.
-            "--ro-bind", script_dir, script_dir,
             "--unshare-all",
             "--die-with-parent",
             "--chdir", workdir,
@@ -309,11 +370,22 @@ def _sandbox_run(script_path, timeout=WALL_CLOCK_TIMEOUT_SECONDS):
         result["findings"].append(
             f"Sandbox has no supported interpreter for this file type "
             f"({os.path.splitext(script_path)[1] or 'no extension'}) - "
-            f"only Python, JavaScript, and shell scripts are sandboxed "
-            f"in this version. Skipped, not an error."
+            f"only Python, JavaScript, shell, Ruby, Rust, and Go are "
+            f"sandboxed in this version. Skipped, not an error."
         )
         return result
-    if shutil.which(interpreter_check[0]) is None:
+    ext_check = os.path.splitext(script_abs_path_check)[1].lower()
+    if ext_check in COMPILERS:
+        compiler_bin = COMPILERS[ext_check][0]
+        if shutil.which(compiler_bin) is None:
+            result["findings"].append(
+                f"Sandbox requires '{compiler_bin}' to compile this "
+                f"source file for dynamic analysis, but it isn't "
+                f"installed in this environment. Skipped gracefully "
+                f"rather than failing."
+            )
+            return result
+    elif shutil.which(interpreter_check[0]) is None:
         result["findings"].append(
             f"Sandbox requires '{interpreter_check[0]}' to run this "
             f"script type, but it isn't installed in this environment. "
@@ -322,8 +394,29 @@ def _sandbox_run(script_path, timeout=WALL_CLOCK_TIMEOUT_SECONDS):
         return result
 
     with tempfile.TemporaryDirectory(prefix="husk_sandbox_") as workdir:
-        before = _snapshot_dir(workdir)
         script_abs_path = os.path.abspath(script_path)
+
+        # Compiled languages (Rust/Go): compile to a binary first,
+        # OUTSIDE the sandbox (the compiler itself needs broader access
+        # than a script should get - only the resulting binary's
+        # runtime behavior is sandboxed). A compilation failure (most
+        # commonly unresolvable external dependencies - a real, honest
+        # v1 limitation) is reported plainly and execution stops here,
+        # not treated as a security finding either way.
+        ext_for_compile = os.path.splitext(script_abs_path)[1].lower()
+        if ext_for_compile in COMPILERS:
+            compiled_path, compile_note = _compile_if_needed(script_abs_path, workdir)
+            if compiled_path is None:
+                result["findings"].append(compile_note)
+                return result
+            script_abs_path = compiled_path
+
+        # Snapshot taken AFTER compilation (if any) - otherwise the
+        # compiled binary itself would show up as a "file created by
+        # the script" in the diff below, which is compilation noise,
+        # not something the sandboxed program itself did.
+        before = _snapshot_dir(workdir)
+
         restricted_env = {
             "PATH": "/usr/bin:/bin",
             "HOME": workdir,
@@ -332,12 +425,22 @@ def _sandbox_run(script_path, timeout=WALL_CLOCK_TIMEOUT_SECONDS):
 
         start = time.time()
         try:
-            command, isolation_level = _build_sandbox_command(script_abs_path, workdir)
+            # For a compiled binary, run it directly (no interpreter
+            # prefix); otherwise look up the interpreter for the
+            # original source extension.
+            interpreter_for_run = [] if ext_for_compile in COMPILERS else _interpreter_for(script_abs_path)
+            command, isolation_level = _build_sandbox_command(script_abs_path, workdir, interpreter_for_run)
             result["isolation_level"] = isolation_level
             # Node needs a much higher RLIMIT_AS ceiling (V8's upfront
             # virtual reservation) - see _apply_resource_limits' docstring.
             ext = os.path.splitext(script_abs_path)[1].lower()
-            as_limit_mb = 4096 if ext == ".js" else MEMORY_LIMIT_MB
+            # Node's V8 and Go's runtime both reserve large virtual
+            # address space upfront regardless of actual usage (Go's
+            # failed with "failed to reserve page summary memory" under
+            # the same tight ceiling that works for Python) - both get
+            # the higher ceiling; Python and shell/Ruby keep the tight
+            # one.
+            as_limit_mb = 4096 if ext_for_compile == ".go" or ext == ".js" else MEMORY_LIMIT_MB
             proc = subprocess.run(
                 command,
                 cwd=workdir,
