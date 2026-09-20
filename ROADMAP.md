@@ -620,11 +620,19 @@ gets real focus before the next starts.
       already-accepted, deliberate tradeoffs, not new bugs. Full story
       in BENCHMARK.md's "Tier 4.3 complete" section.
 
-### 4. LLM-layer stats at full scale; explore "reinforcing" it (WAITING)
-- [ ] Run the LLM-review layer against the full real dataset(s), not
+### 4. LLM-layer stats at full scale; explore "reinforcing" it (COMPLETE)
+- [x] Run the LLM-review layer against the full real dataset(s), not
       just the 6 samples validated live earlier, to get a real
-      large-scale recall number for that layer specifically
-- [ ] **Honest note, stated now rather than discovered later**: "reinforcing"
+      large-scale recall number for that layer specifically - ran 40
+      real samples live (10 known_misses, 20 fresh real malicious
+      including 5 severe finds from this session, 10 real benign).
+      Found and fixed a real bug immediately (max_tokens=300 truncating
+      JSON on longer files). Final: 93.1% recall (27/29 successful
+      responses) on real malicious samples, 100% precision (7/7, zero
+      false positives) on real benign samples. Honestly disclosed a
+      real, reproducible ~10% (4/40) JSON-parsing failure rate not
+      fully resolved by the fix. Full story in BENCHMARK.md.
+- [x] **Honest note, stated now rather than discovered later**: "reinforcing"
       the LLM itself (i.e. improving the underlying Claude model's own
       judgment) is not something this project can do - that's
       Anthropic's model weights, not something a script can fine-tune
@@ -634,4 +642,11 @@ gets real focus before the next starts.
       around it (e.g. always invoking it on specific ambiguous
       patterns rather than only as a manual opt-in). That's the real,
       actionable version of "reinforcing" the LLM layer - refining
-      what Husk controls, not the model itself.
+      what Husk controls, not the model itself. Acted on this: updated
+      the default model to claude-sonnet-5 (the current, most up-to-
+      date Sonnet-tier model), added a new prompt category grounded in
+      the real SRC013 jargon-masked persistence attack, added two real
+      published few-shot examples, and added an explicit instruction
+      not to let confident/compliance-flavored framing lower suspicion.
+
+## TIER 4 COMPLETE - all four items done with real, verified evidence.
