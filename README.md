@@ -78,20 +78,17 @@ nothing in the file's text ever reveals the dangerous behavior. This
 flag actually **runs** the package's Python scripts in a restricted,
 observed environment and reports what they did, not just what they say.
 
-**Real, honest limits - read this before trusting it**: network
-isolation is genuinely kernel-enforced when available (Linux namespace
-isolation via `unshare --net` - a real network namespace with no route
-out at all, verified directly by an automated test, not assumed), with
-an honest fallback to relying on the host's own network restrictions
-when namespace isolation isn't available (every result reports which
-mode actually ran). PID isolation is also real. **Filesystem isolation is not yet real, and a real attempt to add it
-was deliberately abandoned for safety** - see `src/husk/sandbox.py`'s
-docstring for the full, honest account of why (a standard technique
-was tested directly and, twice, leaked outside its namespace and made
-the actual host filesystem read-only, even with the standard safety
-precaution applied - caught and reverted both times with no data loss,
-but confirmed as a real, environment-specific danger, not a
-theoretical one). Observation is
+**Real, honest limits - read this before trusting it**: network and
+filesystem isolation are genuinely kernel-enforced when bubblewrap is
+available (the same underlying technology Flatpak uses in production
+to sandbox untrusted applications) - a real network namespace with no
+route out, and a real filesystem view where unbound paths are
+genuinely invisible (verified directly: a real `FileNotFoundError`,
+not a permission error). Falls back honestly to weaker levels when
+bubblewrap isn't available (network+process isolation via `unshare`,
+or resource-limits-only as a last resort) - every result reports
+exactly which level actually ran via `isolation_level`, never silently
+claiming protection that isn't there. Observation is
 limited to exit code, stdout/stderr, and a filesystem diff - no deep
 syscall tracing. Only Python scripts are sandboxed. A clean run means
 nothing bad happened *this time*, under *these* inputs - not a

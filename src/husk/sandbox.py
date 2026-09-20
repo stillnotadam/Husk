@@ -1,5 +1,5 @@
 """
-Husk - basic dynamic sandboxed analysis (Tier 2 / Tier 3.F).
+Husk - basic dynamic sandboxed analysis (Tier 2 / Tier 3.F / Tier 4.2).
 
 WHY THIS EXISTS
 ----------------
@@ -14,59 +14,54 @@ see behavior that only exists at runtime.
 This module actually RUNS a skill's script in a restricted, observed
 environment and reports what it did, not just what it says.
 
-HONEST SCOPE - READ THIS BEFORE TRUSTING IT
----------------------------------------------
-This is a real step up from a "resource limits only" sandbox, but still
-not full production-grade OS-level isolation like Docker/gVisor/Firecracker:
+ISOLATION LEVELS, HONESTLY RANKED
+-----------------------------------
+This module tries three mechanisms, in order, and uses the strongest
+one actually available and verified working in the current environment
+- it never assumes a tool works just because it's installed, and every
+result reports exactly which level was used via the `isolation_level`
+field, rather than silently claiming protection that isn't really there.
 
-- **Network isolation is real and kernel-enforced when available**: on
-  Linux with root (or unprivileged user namespaces enabled), this uses
-  `unshare --net` to give the sandboxed script its own network
-  namespace with NO network devices at all - not even a route to the
-  outside world. A network call fails with "Network is unreachable" at
-  the OS level, regardless of what firewall or proxy the host
-  environment has. This was verified directly, not assumed: see
-  tests/test_sandbox.py's network-isolation test. If real namespace
-  isolation isn't available in a given environment, this module
-  degrades to relying on the host's OWN network restrictions instead -
-  and honestly reports which mode was used via the
-  `kernel_namespace_isolation` field in every result, rather than
-  silently claiming protection it doesn't have.
-- **PID isolation is also real**: `unshare --pid --fork` gives the
-  script its own process-ID namespace - it cannot see or signal any
-  process outside it.
-- **Filesystem isolation is still NOT real, and a real attempt to add it
-  was deliberately abandoned for safety reasons** - not just unbuilt.
-  The standard technique (a new mount namespace, `mount --make-rprivate`
-  to break propagation, then `remount,ro` on `/` with the working
-  directory bind-mounted back as writable) was tested directly and,
-  twice, leaked outside the namespace and made the actual host
-  filesystem read-only - even with the standard safety precaution
-  applied. This was caught and reverted both times with no data loss,
-  but it demonstrated real, repeatable, environment-specific danger
-  rather than a theoretical risk. This specific technique is NOT
-  implemented in this codebase as a result. A real, safe version of
-  filesystem isolation would need proper container tooling (Docker,
-  gVisor) with its own well-tested isolation guarantees, rather than a
-  manual mount-namespace technique whose safety depends on assumptions
-  about the host's mount configuration that don't hold everywhere.
-- CPU time, memory, and process-count limits are enforced via Python's
-  `resource` module (kernel-tracked `setrlimit`, real and independent
-  of the namespace isolation above).
-- Observation is limited to: exit code, stdout/stderr, wall-clock time,
-  and a before/after filesystem diff of the working directory. It does
-  NOT do real syscall tracing or deep process-tree monitoring beyond
-  what the PID namespace itself provides.
+1. **bubblewrap ("bwrap")** - real, kernel-enforced isolation of
+   network, process visibility, AND filesystem, all three. This is the
+   same underlying technology Flatpak uses in production to sandbox
+   untrusted applications, not a hand-rolled technique. Verified
+   directly during this project's own development: paths not
+   explicitly bound are not merely unwritable but genuinely invisible
+   (a real `FileNotFoundError`, not a permission error), and writes to
+   unbound locations land in an isolated, ephemeral tmpfs that never
+   touches the real host at all. This is the real answer to the
+   filesystem-isolation gap this module used to have - see
+   ROADMAP.md's "Tier 4.2" entry for the earlier attempt that was
+   deliberately abandoned (a manual mount-namespace technique that
+   broke the actual host filesystem twice) versus this one, a
+   purpose-built, battle-tested tool instead of a hand-rolled trick.
+
+2. **`unshare` (network + PID namespaces only)** - the earlier version
+   of this module. Used only when bubblewrap isn't available. Real,
+   kernel-enforced network and process isolation, but the script can
+   still read (and, unlike with bubblewrap, WRITE to) the real host
+   filesystem outside the working directory.
+
+3. **Resource limits only** - the fallback when neither tool is
+   available. Relies on the host environment's own network egress
+   restrictions rather than enforcing isolation itself.
+
+WHAT'S STILL NOT DONE, EVEN AT THE STRONGEST LEVEL
+-----------------------------------------------------
+- Observation is limited to exit code, stdout/stderr, wall-clock time,
+  and a before/after filesystem diff of the *working directory specifically*
+  (writes to the ephemeral tmpfs elsewhere aren't diffed, by design -
+  they're isolated, not something this module needs to inspect).
+  There's no real syscall tracing or network-call content interception.
 - Only Python scripts are sandboxed in this version.
+- CPU time, memory, and process-count limits are enforced via Python's
+  `resource` module regardless of which isolation level is used.
 
-Given these real (and now partially closed) limits, this module is a
-genuine additional signal - useful specifically for the logic-bomb/
-delayed-activation class of attack no read-time review can catch, with
-real network-exfiltration protection when namespace isolation is
-available. It is still not a claim of full behavioral security coverage
-- filesystem isolation in particular remains open. Treat findings from
-this module as "here's what actually happened when we ran it," not
-"this proves the script is safe."
+Given all this, treat findings from this module as "here's what
+actually happened when we ran it," not "this proves the script is
+safe" - a clean run only means nothing bad happened this time, under
+these inputs.
 """
 
 import os
@@ -75,10 +70,18 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import time
+import warnings
 
 
+BWRAP_AVAILABLE = shutil.which("bwrap") is not None
 UNSHARE_AVAILABLE = shutil.which("unshare") is not None
 
+# Directories bound read-only into the bubblewrap sandbox so the Python
+# interpreter itself can actually run. Only directories that exist on
+# this system are used - checked once at import time, not assumed.
+_CANDIDATE_SYSTEM_DIRS = ["/usr", "/lib", "/lib64", "/bin", "/sbin", "/etc", "/lib32", "/libx32"]
+SYSTEM_DIRS_TO_BIND = [d for d in _CANDIDATE_SYSTEM_DIRS if os.path.isdir(d)]
 
 # Conservative limits for a basic sandbox run. These are deliberately
 # tight - a legitimate skill script doing normal work should finish
@@ -94,7 +97,9 @@ def _apply_resource_limits():
     """
     Runs in the child process (via subprocess's preexec_fn) before the
     sandboxed script starts. Sets hard limits so a runaway or malicious
-    script can't consume unbounded CPU, memory, or process slots.
+    script can't consume unbounded CPU, memory, or process slots. Kept
+    independent of, and in addition to, whichever namespace isolation
+    level is used below.
     """
     resource.setrlimit(resource.RLIMIT_CPU, (CPU_TIME_LIMIT_SECONDS, CPU_TIME_LIMIT_SECONDS))
     mem_bytes = MEMORY_LIMIT_MB * 1024 * 1024
@@ -117,13 +122,38 @@ def _snapshot_dir(path):
     return snapshot
 
 
+def _bwrap_isolation_works():
+    """
+    Verifies bubblewrap actually provides real isolation in this
+    environment, rather than assuming it does because the binary
+    exists (bwrap can itself fail to get the namespace permissions it
+    needs in some restricted environments). Checks both that it runs
+    at all, AND that an unbound path is genuinely invisible (the real
+    property this module depends on for filesystem isolation) -
+    verified with a real subprocess call, not assumed. Cached after
+    the first check.
+    """
+    if not BWRAP_AVAILABLE:
+        return False
+    if not hasattr(_bwrap_isolation_works, "_cached"):
+        try:
+            proc = subprocess.run(
+                ["bwrap", "--ro-bind", "/usr", "/usr", "--ro-bind", "/lib", "/lib",
+                 "--ro-bind", "/lib64", "/lib64", "--ro-bind", "/bin", "/bin",
+                 "--unshare-all", "--die-with-parent",
+                 "--", "/usr/bin/python3", "-c",
+                 "import os; assert not os.path.exists('/etc/hostname_marker_that_should_not_exist_anyway') and not os.path.isdir('/root')"],
+                capture_output=True, timeout=5,
+            )
+            _bwrap_isolation_works._cached = proc.returncode == 0
+        except Exception:
+            _bwrap_isolation_works._cached = False
+    return _bwrap_isolation_works._cached
+
+
 def _unshare_isolation_works():
-    """
-    Verifies real kernel namespace isolation actually works in this
-    environment (requires root or unprivileged user namespaces enabled)
-    rather than just assuming it does because the `unshare` binary
-    exists. Cached after the first check.
-    """
+    """Same idea as _bwrap_isolation_works, for the network+PID-only
+    fallback level. Cached after the first check."""
     if not UNSHARE_AVAILABLE:
         return False
     if not hasattr(_unshare_isolation_works, "_cached"):
@@ -133,46 +163,48 @@ def _unshare_isolation_works():
                  "import socket; socket.create_connection(('8.8.8.8', 53), timeout=2)"],
                 capture_output=True, timeout=5,
             )
-            # A real isolated network namespace has no route out at all;
-            # the connection attempt should fail. If it somehow succeeds,
-            # isolation isn't actually in effect here and we should not
-            # claim it is.
             _unshare_isolation_works._cached = proc.returncode != 0
         except Exception:
             _unshare_isolation_works._cached = False
     return _unshare_isolation_works._cached
 
 
-def _build_sandbox_command(script_abs_path):
+def _build_sandbox_command(script_abs_path, workdir):
     """
-    Builds the command to run the sandboxed script. When real kernel
-    namespace isolation is available and verified working, wraps the
-    interpreter in `unshare --net --pid --mount --fork` for genuine,
-    kernel-enforced isolation:
-    - --net: a fresh network namespace with NO network devices at all
-      (not even a route to loopback-external) - network calls fail at
-      the OS level regardless of any external firewall/proxy. This is
-      real isolation, not dependent on the host environment's own
-      egress restrictions the way the earlier version was.
-    - --pid --fork: a fresh PID namespace - the sandboxed script can't
-      see or signal any process outside it.
-    - --mount: a fresh mount namespace - mount/unmount operations
-      inside don't affect the host (though without an additional
-      chroot/pivot_root to a minimal root filesystem, the script can
-      still READ the host's existing filesystem tree - see the honest
-      scope note in this module's docstring).
+    Builds the command to run the sandboxed script, using the
+    strongest isolation level actually verified available. Returns
+    (command_list, isolation_level_string).
+    """
+    if _bwrap_isolation_works():
+        script_dir = os.path.dirname(script_abs_path)
+        cmd = ["bwrap"]
+        for d in SYSTEM_DIRS_TO_BIND:
+            cmd += ["--ro-bind", d, d]
+        cmd += [
+            "--bind", workdir, workdir,
+            # The script file itself lives outside every other bound
+            # directory (e.g. wherever the skill package was extracted
+            # to) - without binding its own directory read-only, bwrap
+            # can't see it to execute it at all. Found via testing: this
+            # was the real cause of every sandboxed run silently
+            # producing empty output.
+            "--ro-bind", script_dir, script_dir,
+            "--unshare-all",
+            "--die-with-parent",
+            "--chdir", workdir,
+            "--",
+            sys.executable, "-I", script_abs_path,
+        ]
+        return cmd, "bubblewrap (network + process + filesystem isolation)"
 
-    Falls back to the plain interpreter command (relying on resource
-    limits and the host's own network restrictions, as in the original
-    v1) when namespace isolation isn't available or verified working.
-    """
     if _unshare_isolation_works():
         return (
             ["unshare", "--net", "--pid", "--mount", "--fork", "--",
              sys.executable, "-I", script_abs_path],
-            True,
+            "unshare (network + process isolation only)",
         )
-    return ([sys.executable, "-I", script_abs_path], False)
+
+    return ([sys.executable, "-I", script_abs_path], "none (resource limits only)")
 
 
 def sandbox_run_python_script(script_path, timeout=WALL_CLOCK_TIMEOUT_SECONDS):
@@ -191,26 +223,22 @@ def sandbox_run_python_script(script_path, timeout=WALL_CLOCK_TIMEOUT_SECONDS):
         "files_modified": list[str],
         "wall_clock_seconds": float,
         "findings": list[str],      # human-readable flags, like the static scanner
+        "isolation_level": str,     # exactly which mechanism actually ran, honestly
     }
 
     Never raises - a script that crashes, hangs, or misbehaves is
     exactly what this function exists to observe, not something that
     should blow up the caller.
     """
-    import time
-
     result = {
         "executed": False, "timed_out": False, "exit_code": None,
         "stdout": "", "stderr": "", "files_created": [], "files_modified": [],
-        "wall_clock_seconds": 0.0, "findings": [], "kernel_namespace_isolation": False,
+        "wall_clock_seconds": 0.0, "findings": [], "isolation_level": "none",
     }
 
     with tempfile.TemporaryDirectory(prefix="husk_sandbox_") as workdir:
         before = _snapshot_dir(workdir)
         script_abs_path = os.path.abspath(script_path)
-        # Minimal environment - do not pass through the real environment,
-        # which could contain credentials or other sensitive values the
-        # sandboxed script has no business seeing.
         restricted_env = {
             "PATH": "/usr/bin:/bin",
             "HOME": workdir,
@@ -219,8 +247,8 @@ def sandbox_run_python_script(script_path, timeout=WALL_CLOCK_TIMEOUT_SECONDS):
 
         start = time.time()
         try:
-            command, isolated = _build_sandbox_command(script_abs_path)
-            result["kernel_namespace_isolation"] = isolated
+            command, isolation_level = _build_sandbox_command(script_abs_path, workdir)
+            result["isolation_level"] = isolation_level
             proc = subprocess.run(
                 command,
                 cwd=workdir,
@@ -273,8 +301,8 @@ def sandbox_run_python_script(script_path, timeout=WALL_CLOCK_TIMEOUT_SECONDS):
         result["findings"].append(
             f"Script exited with non-zero code {result['exit_code']} - "
             f"may indicate it attempted something the sandbox blocked "
-            f"(e.g. a network call denied by the environment's egress "
-            f"restrictions), or simply a normal error in the script."
+            f"(e.g. a network call, or a read/write to a path outside the "
+            f"sandbox), or simply a normal error in the script."
         )
 
     return result

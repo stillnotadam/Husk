@@ -542,11 +542,50 @@ gets real focus before the next starts.
       many more code paths (function bodies, dict assignments, nested
       calls). 7 automated tests, all passing, added to CI.
 
-### 2. Real filesystem isolation for the sandbox (WAITING)
-- [ ] Proper container-based isolation (Docker/gVisor or equivalent),
+### 2. Real filesystem isolation for the sandbox (COMPLETE)
+- [x] Proper container-based isolation (Docker/gVisor or equivalent),
       not the manual mount-namespace technique already tried and
       deliberately abandoned tonight for safety reasons (see the
-      "Real, honest safety incident" entry above).
+      "Real, honest safety incident" entry above). Docker itself
+      wasn't available in this environment, but `bubblewrap` was -
+      installed via `apt-get install bubblewrap` (purpose-built,
+      battle-tested; the same underlying technology Flatpak uses in
+      production to sandbox untrusted applications, not a hand-rolled
+      technique). Tested carefully, checking real host filesystem
+      state before and after every step, given the earlier near-miss:
+      confirmed paths not explicitly bound are genuinely invisible (a
+      real `FileNotFoundError`, not merely a permission error), and
+      writes to unbound paths land in an isolated, ephemeral tmpfs
+      that never touches the real host filesystem at all - verified
+      directly, both before and after every test.
+
+      Rewrote `src/husk/sandbox.py` to try three isolation levels, in
+      order, using the strongest one actually verified working in the
+      current environment: bubblewrap (network + process + filesystem,
+      all real) → `unshare` (network + process only, the earlier
+      session's level) → resource-limits-only fallback. Every result
+      now reports exactly which level ran via `isolation_level`,
+      rather than silently claiming protection that isn't really
+      there.
+
+      Real debugging along the way, not a clean first try: the
+      bubblewrap detection check initially failed because it forgot to
+      bind `/lib64` (needed for the dynamic linker) - fixed and
+      verified. Then real sandboxed runs started returning empty
+      output entirely - traced to a genuine, important bug: the
+      script file itself lives outside every bound directory (wherever
+      the skill package was extracted to), so bubblewrap literally
+      couldn't see it to execute it. Fixed by also read-only-binding
+      the script's own parent directory.
+
+      Verified end-to-end: all 6 sandbox tests pass, including a new
+      real filesystem-escape test (attempts to read `/root` and write
+      outside the sandbox, both correctly blocked), the CLI's
+      `--sandbox` flag works end-to-end with real isolation active,
+      and the actual host filesystem was directly confirmed safe and
+      fully writable after every single test in this session - the
+      standard the earlier safety incident demanded before trusting
+      this again.
 
 ### 3. Find more real, sophisticated malicious samples; push recall further (WAITING)
 - [ ] Source additional high-quality real malicious skill datasets
