@@ -199,11 +199,18 @@ not just assertion. This file tracks exactly what's left to get there.
       IAM/OAuth-specific privilege escalation beyond AWS-credential-file
       and wallet-extension access already covered.
 
-      **Partial coverage**: non-Python native code (Rust/Go/Ruby files
-      are scanned for the same generic patterns - curl|bash, bare-IP,
-      secrecy language - but have no language-specific dangerous-call
-      detection the way Python does; PowerShell is the one exception,
-      with real coverage added this session).
+      **Partial coverage, since closed**: non-Python native code
+      (Rust/Go/Ruby) originally had only generic patterns - curl|bash,
+      bare-IP, secrecy language - no language-specific dangerous-call
+      detection the way Python had. **Resolved**: added shell-
+      interpreter-spawn detection for Command::new() (Rust),
+      exec.Command() (Go), and Kernel#exec/system()/%x{} (Ruby),
+      validated against all 146 real .rs/.go/.rb files across both
+      datasets, with 3 real precision bugs found and fixed along the
+      way (including a genuine Ruby/AI-API collision: "system" as a
+      quoted-argument LLM prompt parameter name colliding with Ruby's
+      shell-execution function). See the dedicated commit for full
+      detail.
 
       **Structurally undetectable by any static (or even LLM) read**,
       documented honestly rather than chased further: Self-Mutating
