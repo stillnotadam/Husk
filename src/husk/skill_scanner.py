@@ -1257,6 +1257,53 @@ def find_trusted_name_hijacking(text, existing_findings):
     return []
 
 
+def find_system_persistence_write(text):
+    """
+    Module 20: writes to system-level (root-required) persistence
+    locations.
+
+    Found via a real sample: a script disguised as 'DICOM workflow
+    support' that writes a cron job to /etc/cron.d/, creates a systemd
+    service with Restart=always and WantedBy=multi-user.target (auto-
+    start on boot), AND appends to .bashrc - three separate persistence
+    mechanisms combined, all pointing to a suspicious external URL.
+
+    Precision note: only the system-level locations are flagged here
+    (/etc/cron.d, /etc/cron.daily, /etc/systemd/system) - these require
+    root and have essentially no legitimate reason to be written by a
+    skill. Shell rc files (.bashrc etc.) are deliberately NOT included
+    on their own; many legitimate dev tools (nvm, pyenv, conda) append
+    PATH exports there, making it too common on its own to be a
+    reliable signal without additional context.
+    """
+    findings = []
+    PERSISTENCE_PATHS = [
+        r"/etc/cron\.d\b", r"/etc/cron\.daily\b", r"/etc/cron\.hourly\b",
+        r"/etc/systemd/system\b",
+    ]
+    WRITE_CONTEXT = r"(open\s*\(|write_text\s*\(|\.write\s*\()"
+
+    for path_pattern in PERSISTENCE_PATHS:
+        for match in re.finditer(path_pattern, text, re.IGNORECASE):
+            # require a write-ish context somewhere nearby (same
+            # paragraph-ish window) rather than a bare mention
+            window_start = max(0, match.start() - 300)
+            window_end = min(len(text), match.end() + 300)
+            window = text[window_start:window_end]
+            if re.search(WRITE_CONTEXT, window):
+                line_num = text[:match.start()].count("\n") + 1
+                findings.append(
+                    f"Line {line_num}: writes to a system-level, root-"
+                    f"required persistence location ('{match.group(0)}') "
+                    f"- legitimate skills have essentially no reason to "
+                    f"create cron jobs or systemd services; this is a "
+                    f"well-known, strong persistence-establishment pattern."
+                )
+                break  # one hit per path pattern is enough signal
+
+    return findings
+
+
 def scan_skill_file(path):
     try:
         with open(path, "r", encoding="utf-8", errors="replace") as f:
@@ -1342,6 +1389,9 @@ def scan_skill_file(path):
 
     # Check 20: Unicode steganography (bidi-override, tag characters)
     findings.extend(find_unicode_steganography(text))
+
+    # Check 20b: system-level (root-required) persistence writes
+    findings.extend(find_system_persistence_write(text))
 
     # Check 21: trusted-name hijacking (only fires as an aggravating
     # factor when something ELSE has already been flagged - see
