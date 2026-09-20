@@ -1,3 +1,48 @@
+# Husk - Benchmark Summary
+
+**Read this first.** This file has grown very large across many real
+testing sessions - this section is the current, accurate headline,
+everything below is the full supporting record (methodology, every
+competitor comparison, every bug found and fixed along the way).
+
+## Current real-world numbers (static analysis only, no LLM)
+
+| | Result |
+|---|---|
+| **MalSkillBench** recall (3,944 real malicious samples, full dataset) | **64.4% (2,540/3,944)** |
+| **MaliciousSkillBench** recall (7,526 real malicious samples, full dataset) | **61.5% (4,625/7,526)** |
+| False positives, curated real-skill baseline (249 samples) | **244/249 (98.0%) clean** |
+| False positives, MalSkillBench benign set (4,000 samples, full dataset) | **90.0% (3,599/4,000) clean** |
+
+Two fully independent real datasets, no LLM, no third-party model -
+that is the number this project stands behind. Everything involving
+an LLM elsewhere in this document is a clearly separate, clearly
+secondary story, and where it succeeds, credit belongs to Anthropic's
+Claude model, not this project's own engineering (see README.md).
+
+## Competitors tested, honestly, head to head
+
+| Competitor | Result |
+|---|---|
+| Snyk Agent Scan | Access blocked (403 on real analysis endpoint even with valid tokens) - documented, not a detection comparison |
+| SkillScan | **Decisive win** (8/8 vs 0/8 on real samples) |
+| agent-audit-kit | Nuanced - Husk wins at matched confidence; their loose mode has higher raw recall at a real precision cost |
+| agent-audit | **Clean win**, both axes, both thresholds |
+| SkillSpector (NVIDIA, 14.2k stars) | **Win at matched confidence**; their loose mode has a 78% false-positive rate |
+| SkillFortify | **Clean win**, both axes, despite their "formal verification" claim |
+| Cisco AI Defense Skill Scanner | **Clean win**, both axes |
+
+## What this static engine cannot do, by design
+
+Some real attacks are structurally undetectable by any pre-execution
+read - static or LLM - because the malicious content doesn't exist in
+the file until it's actually run (Self-Mutating Poisoning) or is
+generated dynamically at runtime. Confirmed directly against real
+samples and the underlying published research. See "Honest limitation"
+below for the full account.
+
+---
+
 # Benchmark: Husk vs. Snyk agent-scan
 
 **Headline real-world result**: static analysis alone - no LLM, no

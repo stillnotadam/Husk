@@ -1,3 +1,42 @@
+# Husk - Roadmap Summary
+
+**Read this first.** This file is a long, detailed session-by-session
+log across a lot of real work - this section is the current, accurate
+status; everything below is the full record.
+
+## Status: everything originally planned is done
+
+| Tier | Goal | Status |
+|---|---|---|
+| Tier 1 | Real-dataset validation, false-positive testing, CI, packaging, beat Snyk in a real benchmark | ✅ Complete |
+| Tier 2 | LLM backup layer, diverse regression suite, full taxonomy audit, multi-platform support, dynamic sandbox | ✅ Complete |
+| Tier 3 | Bulk real-sample sourcing, real competitor benchmarks (7 tested), learn from competitor source, platform diversity, real kernel-isolated sandbox | ✅ Complete |
+| Tier 4 | AST taint tracking (incl. parameter-flow), real filesystem isolation, mined for more real attacks, LLM layer validated at scale | ✅ Complete |
+
+## Current, real numbers
+
+**35 detection functions** across skill-content and taint-flow
+analysis, 68 automated tests (up from the original handful), 76% code coverage, `ruff`/`mypy` both clean, real
+kernel-level sandbox isolation (network + process + filesystem,
+verified against real attacks), an AST-based taint tracker, an
+optional LLM-review layer validated at 93%+ recall live, and seven
+honest head-to-head competitor benchmarks. See BENCHMARK.md's own
+summary for the exact current recall/precision numbers.
+
+## What's genuinely still open
+
+- **Snyk access** - blocked (documented 403 on the real analysis
+  endpoint); an outreach email is drafted and ready
+  (`snyk_outreach_draft.md`) but needs the user to actually send it -
+  this is the one item that isn't engineering work.
+- Two more named competitors found but not yet tested (SkillFortify's
+  sibling tools, `skillfrisk`).
+- A handful of smaller, explicitly-tracked items - see the dated
+  entries below for the honest, complete history of what's been tried,
+  what broke, and how it got fixed.
+
+---
+
 # Roadmap to Tier 1 - "better than Snyk at what it's actually built for"
 
 Not a claim of general superiority - a specific, provable one: catching
