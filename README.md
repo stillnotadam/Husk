@@ -4,6 +4,31 @@
 
 A static security scanner for AI agent skill packages - built to specifically defend against bypass techniques that were shown, in published 2026 security research, to defeat production scanners from Snyk, Cisco, and Vercel's skills.sh.
 
+## Benchmark - how it compares
+
+Real numbers, real datasets, no cherry-picking: full results and
+methodology in [BENCHMARK.md](BENCHMARK.md).
+
+![Husk vs. competitors, matched precision](assets/benchmark_comparison.png)
+
+At matched precision (each tool's strictest reading), Husk has the
+best combination of recall and precision of every real competitor
+tested - and it's the only tool near the "usable as an automated gate"
+corner:
+
+![Precision vs. recall tradeoff](assets/precision_recall_tradeoff.png)
+
+| | Recall (real malicious) | Precision (real legitimate) |
+|---|---|---|
+| **Husk** | **61.5–64.4% (full datasets, 11,470 real samples)** | **98.0%** |
+| Best competitor at matched precision | ~57% | 81–94% |
+| Best competitor raw recall (loose mode, high false positives) | 92.5% | 22–59% |
+
+Snyk's own Agent Scan is excluded from the numeric comparison - its
+real analysis endpoint returns 403 even with a valid account token
+(documented in BENCHMARK.md), so no real detection number was
+obtainable, not because it performed worse.
+
 ## Why this exists
 
 AI agents can now install "skills" - reusable packages that tell an agent how to accomplish tasks, often bundling instructions with executable code. This is a fast-growing, under-protected attack surface: research published by Cisco (January 2026) found that roughly a quarter of agent skills across major registries contained at least one security vulnerability, and coordinated malicious-skill campaigns have already compromised thousands of skills across registries like ClawHub.
