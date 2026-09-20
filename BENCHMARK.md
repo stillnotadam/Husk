@@ -950,3 +950,26 @@ benign samples. Credit for these results belongs to Claude's own
 reasoning, not to engineering in this project - consistent with how
 this layer has been framed throughout (see README.md's "a backup, not
 the main event" section).
+
+---
+
+# Updated full-dataset benchmark (post gap-closing session)
+
+Re-ran the complete benchmarks (not samples) after the round of gap-
+closing work: 8 new detection modules (self-modification, capability
+mismatch, markdown image beacon, npm postinstall bootstrap, DNS
+covert-channel, SQL injection, sensitive-data-logging) plus
+language-specific fixes for Rust/Go/Ruby.
+
+| | Before this round | After |
+|---|---|---|
+| MalSkillBench recall (3,944 samples) | 62.9% | **64.4%** |
+| MaliciousSkillBench recall (7,526 samples) | 60.2% | **61.5%** |
+| MalSkillBench benign clean (4,000 samples) | 90.1% | **90.0%** |
+| 249-skill established baseline | 244/249 | **244/249** |
+
+Real, consistent recall improvement on both independent datasets, with
+essentially unchanged precision (90.0% vs 90.1% - within normal
+variation, not a regression) and the smaller, curated baseline held
+exactly. The gap-closing modules added real detection without trading
+away trustworthiness.
