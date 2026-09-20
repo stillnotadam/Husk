@@ -687,3 +687,34 @@ mismatch) not present anywhere else in this project.
 
 Full test suite: 32 passed, 10 xfailed (up from 29 at the start of
 this review).
+
+## Fully closed everything actionable without Snyk access
+
+2026-09-20 (continued further): Closed every remaining item from the
+gap review except Snyk access itself:
+
+- LLM layer's 10% JSON-parsing failure rate: real fixes built
+  (regex-fallback extraction, higher max_tokens, temperature=0),
+  verified structurally (6/6 mocked tests). NOT yet validated live -
+  needs a fresh API key to confirm the real-world rate actually
+  dropped, not just that the code handles more shapes in theory.
+- Tested 3 more real, named competitors: SkillSpector (NVIDIA, 14.2k
+  stars) and SkillFortify - clean wins for Husk at matched confidence
+  on both, with SkillSpector's loose mode showing the worst false-
+  positive rate (78%) of any competitor tested in this project despite
+  its otherwise-impressive scale. Also tested Cisco AI Defense's
+  skill-scanner (1,724 stars) - a clean win with no loose/strict
+  ambiguity to complicate the comparison.
+- Mined 6 more real patterns total from skillscan-security's 334 rules
+  across this closing session: markdown image beacon exfiltration,
+  npm postinstall bootstrap, DNS covert-channel exfiltration, macOS
+  JXA execution, and Docker socket/privileged-container escalation.
+- Also closed 2 items from agent-audit's rules that were earlier
+  deprioritized: SQL injection via string interpolation, sensitive-
+  data logging.
+
+Full test suite: 39 passed, 10 xfailed (up from 33 at the start of
+this closing session). 7 real competitor benchmarks now in
+BENCHMARK.md. Only Snyk access remains genuinely open, and that needs
+the user (a drafted outreach email is sitting in the repo root,
+snyk_outreach_draft.md).
