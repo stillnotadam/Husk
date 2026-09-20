@@ -938,7 +938,7 @@ def find_subprocess_network_exfil(text):
     exfiltrated file contents without ever using shell=True.
     """
     findings = []
-    pattern = r"subprocess\.(Popen|call|run)\s*\(\s*\[\s*[\"'](curl|wget|nc|netcat)[\"']"
+    pattern = r"subprocess\.(Popen|call|run|check_output|check_call)\s*\(\s*\[\s*[\"'](curl|wget|nc|netcat)[\"']"
     for match in re.finditer(pattern, text, re.IGNORECASE):
         line_num = text[:match.start()].count("\n") + 1
         findings.append(
@@ -968,7 +968,7 @@ def find_shell_true_subprocess(text):
     """
     findings = []
     WINDOW = 300
-    for match in re.finditer(r"subprocess\.(Popen|call|run)\s*\(", text):
+    for match in re.finditer(r"subprocess\.(Popen|call|run|check_output|check_call)\s*\(", text):
         window = text[match.end():match.end() + WINDOW]
         if re.search(r"shell\s*=\s*True", window):
             if _is_negated(text, match.start()):
@@ -984,7 +984,8 @@ def find_shell_true_subprocess(text):
 
 def find_permission_escalation(text):
     """
-    Module 12: world-writable/executable permission changes.
+    Module 12: world-writable/executable permission changes, and
+    SUID/SGID bit setting.
 
     A real sample found in large-scale testing used os.chmod(target,
     0o777) to make a script world-writable and world-executable before
@@ -992,6 +993,17 @@ def find_permission_escalation(text):
     Legitimate skills essentially never need 0o777 (or equivalent
     world-writable modes); tighter permissions are always sufficient
     for normal use.
+
+    Separately, and more severely: a real sample used
+    subprocess.run(['chmod', '4755', path]) to set the SUID bit on a
+    script - a qualitatively different, more dangerous pattern than
+    777 alone. A SUID-bit file runs with the FILE OWNER's privileges
+    (often root) regardless of who executes it, a well-known and
+    serious privilege-escalation primitive. Checked separately from
+    the os.chmod() Python-call pattern above because this one is
+    invoked via a shelled-out 'chmod' command in a subprocess argument
+    list, a structurally different shape the original pattern didn't
+    cover.
     """
     findings = []
     pattern = r"(os\.chmod|Path\([^)]*\)\.chmod)\s*\([^)]*0o?7[0-7]7"
@@ -1005,6 +1017,25 @@ def find_permission_escalation(text):
             f"need mode 777; this is a common persistence/tampering "
             f"pattern."
         )
+
+    # SUID/SGID bit: a leading 4, 2, or 6 (4=SUID, 2=SGID, 6=both) on a
+    # 4-digit chmod mode, via a shelled-out 'chmod' command specifically
+    # (os.chmod() doesn't commonly appear this way for SUID in practice,
+    # but the subprocess-list shape is what the real sample used).
+    suid_pattern = r"[\"']chmod[\"'].{0,30}[\"']([462][0-7]{3})[\"']"
+    for match in re.finditer(suid_pattern, text, re.IGNORECASE):
+        if _is_negated(text, match.start()):
+            continue
+        line_num = text[:match.start()].count("\n") + 1
+        findings.append(
+            f"Line {line_num}: sets the SUID/SGID bit via a shelled-out "
+            f"chmod command (mode '{match.group(1)}') - a file with this "
+            f"bit set runs with the FILE OWNER's privileges (often root) "
+            f"regardless of who executes it, a well-known, serious "
+            f"privilege-escalation primitive with essentially no "
+            f"legitimate use in an ordinary skill."
+        )
+
     return findings
 
 
