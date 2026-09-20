@@ -669,8 +669,13 @@ def find_fake_prerequisite_socialengineering(text):
 
     PASSWORD_ARCHIVE_PATTERN = r"((?:password|pass\s*:)[:\s]+[`'\"]?\w+[`'\"]?).{0,30}(extract|unzip)|((extract|unzip).{0,30}(?:password|pass\s*:)[:\s]+[`'\"]?\w+)"
 
-    REQUIRE_FRAMING_PATTERN = r"(requires? (?:the )?[\w\-]+ (?:utility|agent|cli|tool) to function|without [\w\-]+ installed[^.]{0,40}(?:will not work|won.t work|will not function))"
-    EXE_DOWNLOAD_LINK_PATTERN = r"\[.*?\]\(https?://[^\)]+\.(zip|exe)\)"
+    REQUIRE_FRAMING_PATTERN = r"(requires? (?:the )?[\w\-]+ (?:utility|agent|cli|tool) (?:to function|for [\w\s]{1,30}(?:operations?|purposes?))|without [\w\-]+ installed[^.]{0,40}(?:will not work|won.t work|will not function))"
+    # Broadened after real-world testing: an earlier version only
+    # matched a markdown-link download to a .zip/.exe - missed a real
+    # sample using a plain `wget https://.../agent-helper.tar.gz`
+    # command (no markdown link syntax, .tar.gz not in the original
+    # extension list).
+    EXE_DOWNLOAD_LINK_PATTERN = r"(\[.*?\]\(https?://[^\)]+\.(zip|exe)\)|(?:wget|curl)\s+[\"']?https?://[^\s\"']+\.(zip|exe|tar\.gz|tgz))"
 
     # Sub-pattern 1: paste-site + terminal execution instruction
     for match in re.finditer(PASTE_SITE_PATTERN, text, re.IGNORECASE):
@@ -1544,6 +1549,19 @@ def scan_skill_file(path):
 
     # Check 20d: reverse shell (socket + dup2 + shell spawn)
     findings.extend(find_reverse_shell_pattern(text))
+
+    # Check 20e: self-incriminating attack-description language
+    # REMOVED after real-world testing: "attacker-controlled" collided
+    # twice with legitimate security-focused documentation (a real
+    # security-review skill discussing "attacker-controlled values"
+    # crossing trust boundaries - standard security terminology; a
+    # real scanner skill listing "exfiltrate to attacker-controlled
+    # servers" as one bullet in a THREATS-IT-DETECTS list, not a self-
+    # description). This phrase is too collision-prone with exactly
+    # the audience most likely to write it legitimately (security
+    # tooling). Fixed instead by broadening module 7's
+    # REQUIRE_FRAMING_PATTERN and EXE_DOWNLOAD_LINK_PATTERN above,
+    # which catch the same real sample more safely.
 
     # Check 21: trusted-name hijacking (only fires as an aggravating
     # factor when something ELSE has already been flagged - see
