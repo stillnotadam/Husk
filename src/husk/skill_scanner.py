@@ -1489,6 +1489,60 @@ def find_shell_credential_substitution(text):
     return findings
 
 
+def find_self_modification_pattern(text):
+    """
+    Module 22: agent/skill self-modification.
+
+    Technique inspiration: agent-audit's AGENT-053 rule (ASI-10, "Agent
+    Self-Modification Risk") - its source was read directly as part of
+    this project's competitor research (Tier 4, item covering
+    competitor code study). Detects code that writes to a Python file
+    or the skill's own SKILL.md definition, combined with dynamically
+    reloading/executing the modified code (importlib reload/
+    spec_from_file_location/exec_module, or compile+exec together).
+
+    This connects directly to a real, documented blind spot in this
+    project: Self-Mutating Poisoning (SMP, see BENCHMARK.md's "Honest
+    limitation" section) is structurally undetectable by any pre-
+    execution read, because the malicious content doesn't exist in the
+    file yet - it's generated at runtime. This check is a real, partial
+    mitigation for exactly that class: even though we can't know WHAT
+    a self-modifying skill will eventually write, we CAN detect THAT it
+    has the capability to rewrite and reload itself, which is itself a
+    strong, well-known warning sign (ASI-10) with essentially no
+    legitimate reason to exist in an ordinary skill.
+    """
+    findings = []
+    WRITE_TO_CODE = r"open\s*\([^)]*\.(py|md)['\"][^)]*['\"]w"
+    SKILL_MD_WRITE = r"open\s*\([^)]*SKILL\.md[^)]*['\"]w"
+    RELOAD_PATTERNS = r"(importlib\.reload|spec_from_file_location|exec_module|compile\s*\([^)]*exec)"
+
+    has_reload = re.search(RELOAD_PATTERNS, text, re.IGNORECASE)
+    skill_md_write = re.search(SKILL_MD_WRITE, text, re.IGNORECASE)
+
+    if skill_md_write:
+        line_num = text[:skill_md_write.start()].count("\n") + 1
+        findings.append(
+            f"Line {line_num}: writes to its own SKILL.md definition "
+            f"file - a skill rewriting its own instructions is a well-"
+            f"known self-modification/persistence pattern (ASI-10) with "
+            f"essentially no legitimate use case."
+        )
+    elif has_reload:
+        write_match = re.search(WRITE_TO_CODE, text, re.IGNORECASE)
+        if write_match:
+            line_num = text[:write_match.start()].count("\n") + 1
+            findings.append(
+                f"Line {line_num}: writes to a code file and also uses "
+                f"dynamic module reloading/execution elsewhere in the "
+                f"file - the combination (write then reload) enables an "
+                f"agent to rewrite and re-execute its own code, a well-"
+                f"known self-modification risk (ASI-10)."
+            )
+
+    return findings
+
+
 def scan_skill_file(path):
     try:
         with open(path, "r", encoding="utf-8", errors="replace") as f:
@@ -1586,6 +1640,9 @@ def scan_skill_file(path):
 
     # Check 20f: shell command-substitution credential theft
     findings.extend(find_shell_credential_substitution(text))
+
+    # Check 22: agent/skill self-modification (partial SMP mitigation)
+    findings.extend(find_self_modification_pattern(text))
 
     # Check 20e: self-incriminating attack-description language
     # REMOVED after real-world testing: "attacker-controlled" collided
