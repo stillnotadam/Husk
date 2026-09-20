@@ -1178,3 +1178,41 @@ dataset (most likely this specific file falling outside the file
 ranges actually processed across several interrupted/resumed batch
 runs), not a real detection gap - corrected here rather than left
 standing uncorrected.
+
+---
+
+# Benchmark 8: Husk vs. skillfrisk
+
+Found via continued competitor research: skillfrisk (PyPI) - "a static
+security scanner for AI-agent skills and MCP servers," with a notably
+different secondary feature this project doesn't have (`skillfrisk
+diff`, comparing two versions of a skill to flag what a supply-chain
+update actually changed). Installed via `pip install skillfrisk`, runs
+fully offline, genuinely fast (~0.3s/scan, the fastest tool tested in
+this project).
+
+## Setup
+
+The same exact 60-sample subsets (fixed seed) already used for the
+Cisco AI Defense comparison - both figures for Husk on this specific
+subset were already established there, re-confirmed directly here
+rather than assumed.
+
+## Results
+
+| | Recall (60 real malicious) | False positives (60 real legit) |
+|---|---|---|
+| **Husk** | **68.3% (41/60)** | **96.7% clean (58/60)** |
+| skillfrisk | 53.3% (32/60) | 83.3% clean (50/60) |
+
+A clean win for Husk on both axes.
+
+## Fair note
+
+skillfrisk's `diff` command targets a genuinely different, real
+problem this project doesn't address at all - not "is this skill
+malicious" but "what changed between two versions," which matters for
+catching a supply-chain-style attack where a previously-benign,
+already-trusted skill gets quietly modified. Worth naming as a real
+gap in Husk's own scope, not just a feature the other tool happens to
+have.
