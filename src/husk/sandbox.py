@@ -285,19 +285,34 @@ def _build_sandbox_command(script_abs_path, workdir, interpreter):
         cmd = ["bwrap"]
         for d in SYSTEM_DIRS_TO_BIND:
             cmd += ["--ro-bind", d, d]
-        cmd += ["--bind", workdir, workdir]
         # The script file itself usually lives outside every other
         # bound directory (e.g. wherever the skill package was
         # extracted to) - without binding its own directory read-only,
         # bwrap can't see it to execute it at all. Found via testing:
         # this was the real cause of every sandboxed run silently
         # producing empty output. EXCEPTION: a compiled binary lives
-        # INSIDE workdir itself (already bound read-write above) -
-        # adding a second, read-only bind for the same path would
-        # conflict with and override the read-write one, breaking
-        # file-creation detection for compiled languages specifically.
+        # INSIDE workdir itself (already bound read-write below) -
+        # adding a second, read-only bind for the same exact path
+        # would conflict with and override the read-write one,
+        # breaking file-creation detection for compiled languages.
+        #
+        # ORDERING MATTERS, found via a second real bug: workdir's
+        # read-write bind must come AFTER this one, not before. If the
+        # script happens to live in a PARENT of workdir (a real,
+        # realistic case - Python's tempfile module places workdir
+        # under /tmp by default, and a skill script extracted
+        # elsewhere under /tmp would collide), bwrap applies binds in
+        # order, so a read-only parent bind processed AFTER workdir's
+        # read-write bind silently makes workdir read-only too -
+        # exactly what happened when testing this sandbox against a
+        # script that happened to sit directly in /tmp. Binding the
+        # (possibly-parent) read-only path FIRST and workdir's
+        # read-write bind LAST ensures workdir's read-write status
+        # always wins for its own exact path, regardless of any
+        # parent/child relationship with script_dir.
         if script_dir != workdir:
             cmd += ["--ro-bind", script_dir, script_dir]
+        cmd += ["--bind", workdir, workdir]
         cmd += [
             "--unshare-all",
             "--die-with-parent",

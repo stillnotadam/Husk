@@ -195,6 +195,35 @@ def test_compilation_failure_degrades_gracefully():
         os.unlink(rs_path)
 
 
+def test_script_in_parent_of_workdir_still_gets_readwrite_workdir():
+    """
+    Real bug found via testing the sandbox against a real ransomware
+    sample's behavioral pattern: Python's tempfile module places
+    workdir under /tmp by default. If the script being sandboxed also
+    happens to live directly in /tmp (a realistic case - many
+    extraction/download workflows land under /tmp), the read-only bind
+    for the script's parent directory was being applied AFTER
+    workdir's read-write bind, silently making workdir read-only too
+    and breaking every file-creation-detection test for any script in
+    this situation. Fixed by binding the (possibly-parent) read-only
+    path first and workdir's read-write bind last."""
+    real_tmp = tempfile.gettempdir()
+    with tempfile.NamedTemporaryFile(dir=real_tmp, suffix=".py", mode="w", delete=False) as f:
+        f.write(
+            'with open("proof_of_writability.txt", "w") as out:\n'
+            '    out.write("workdir was genuinely writable")\n'
+            'print("done")\n'
+        )
+        script_path = f.name
+    try:
+        result = sandbox_run_script(script_path, timeout=8)
+        assert result["executed"] is True
+        assert result["exit_code"] == 0
+        assert "proof_of_writability.txt" in result["files_created"]
+    finally:
+        os.unlink(script_path)
+
+
 def test_never_raises_on_a_nonexistent_script():
     """The sandbox must degrade gracefully, never crash the caller."""
     result = sandbox_run_python_script("/nonexistent/path/does_not_exist.py")
