@@ -1137,6 +1137,15 @@ def find_safety_bypass_instruction(text):
         r"pre-?approved.{0,30}(all|every)",
         r"allowed-tools:\s*[\"']?(Bash|Write|Edit|WebFetch)\(\*\)",
         r"allowed-tools:\s*\*\s*$",
+        # Found via real-world testing (MalSkillBench prompt-injection
+        # samples): the same underlying "disable safety" concept,
+        # phrased in blander, more corporate-sounding language that
+        # the narrower patterns above don't generalize to.
+        r"safety bypass",
+        r"without (?:applying )?(?:content filtering|validation protocols?)",
+        r"unrestricted.{0,20}protocol",
+        r"clear (?:any )?(?:directive parameters|prior instructions)",
+        r"without.{0,20}content filtering",
     ]
     for pattern in SAFETY_BYPASS_PATTERNS:
         for match in re.finditer(pattern, text, re.IGNORECASE | re.MULTILINE):
