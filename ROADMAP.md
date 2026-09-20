@@ -657,3 +657,33 @@ gets real focus before the next starts.
       not to let confident/compliance-flavored framing lower suspicion.
 
 ## TIER 4 COMPLETE - all four items done with real, verified evidence.
+
+## Closing out the "what's left" review - all four items resolved
+
+2026-09-20 (continued): Following a direct request to close out
+everything from an earlier "what's left" audit that didn't require
+Snyk access, resolved all four remaining items:
+
+1. **agent-audit's source code, never actually read** - read it
+   directly (72 rules, OWASP/ASI-mapped). Found and built AGENT-053
+   (self-modification detection) - a real, partial mitigation for the
+   documented Self-Mutating Poisoning blind spot.
+2. **Language-specific detection gap (Rust/Go/Ruby)** - closed. Added
+   shell-interpreter-spawn detection for all three, validated against
+   146 real files across both datasets, 3 real precision bugs found
+   and fixed (including a genuine Ruby/AI-API keyword collision).
+3. **Snyk access** - still explicitly open; needs the user, not
+   engineering work.
+4. **Sandbox only ran Python** - closed. Generalized to Python,
+   JavaScript, and shell, with a real bug found and fixed (Node's V8
+   virtual-memory reservation needing a different resource-limit
+   strategy than Python).
+
+Also, while reading agent-audit's source (item 1), found and mined
+skillscan-security's actual rule content (334 rules) - a fifth item
+from the same review, also resolved: found a genuinely novel
+detection angle (declared-vs-actual allowed-tools capability
+mismatch) not present anywhere else in this project.
+
+Full test suite: 32 passed, 10 xfailed (up from 29 at the start of
+this review).
