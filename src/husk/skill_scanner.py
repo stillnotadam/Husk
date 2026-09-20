@@ -1335,6 +1335,60 @@ def find_system_persistence_write(text):
     return findings
 
 
+def find_ransom_note_pattern(text):
+    """
+    Module 21b: ransom note / cryptocurrency payment demand content.
+
+    Found via a real, severe sample disguised as a "data optimization
+    utility": walks every file in a directory, encrypts each one with
+    ChaCha20 + RSA (textbook ransomware hybrid encryption - a random
+    session key encrypts the data, then the session key itself is
+    encrypted with an RSA public key so only the attacker's matching
+    private key can decrypt it), DELETES the original files, then
+    writes a ransom note demanding Bitcoin payment with a redemption
+    code. Completely undisguised ransomware, missed by every existing
+    module.
+
+    This specific check targets the ransom note itself: cryptocurrency
+    payment-demand language has essentially zero legitimate use case in
+    a skill file, and is a highly reliable, low-false-positive signal
+    on its own - it doesn't need to be combined with the encryption
+    behavior to be worth flagging.
+    """
+    findings = []
+    CRYPTO_PAYMENT_TERMS = r"(bitcoin|btc wallet|crypto wallet address|monero)"
+    # "payment" alone was too generic - real ransom notes specifically
+    # use language tied to DATA RECOVERY (redeem, decrypt, recover),
+    # not just "payment" in general. Found via real-world false-
+    # positive testing: legitimate crypto/fintech tools (a Bitcoin
+    # wallet CLI, a Lightning-payment service, an invoice template
+    # listing Bitcoin as one payment option) all got flagged purely
+    # because "bitcoin" and "payment" appeared near each other for
+    # completely ordinary reasons. The actual real ransomware sample
+    # this module targets only matched "payment" because it happened
+    # to appear inside a domain name (payment.bitcoinvault.top), not
+    # as meaningful demand language - removing it loses nothing real.
+    DEMAND_TERMS = r"(redeem|ransom|decrypt your files|recover your files|redemption code|pay to (?:decrypt|recover|unlock))"
+
+    for match in re.finditer(CRYPTO_PAYMENT_TERMS, text, re.IGNORECASE):
+        window_start = max(0, match.start() - 150)
+        window_end = min(len(text), match.end() + 150)
+        window = text[window_start:window_end]
+        demand_match = re.search(DEMAND_TERMS, window, re.IGNORECASE)
+        if demand_match:
+            line_num = text[:match.start()].count("\n") + 1
+            findings.append(
+                f"Line {line_num}: cryptocurrency payment-demand language "
+                f"('{match.group(0)}' near '{demand_match.group(0)}') - "
+                f"this combination has essentially no legitimate use case "
+                f"in a skill file and is a highly reliable ransomware "
+                f"indicator."
+            )
+            break
+
+    return findings
+
+
 def scan_skill_file(path):
     try:
         with open(path, "r", encoding="utf-8", errors="replace") as f:
@@ -1423,6 +1477,9 @@ def scan_skill_file(path):
 
     # Check 20b: system-level (root-required) persistence writes
     findings.extend(find_system_persistence_write(text))
+
+    # Check 20c: ransom note / cryptocurrency payment demand content
+    findings.extend(find_ransom_note_pattern(text))
 
     # Check 21: trusted-name hijacking (only fires as an aggravating
     # factor when something ELSE has already been flagged - see
