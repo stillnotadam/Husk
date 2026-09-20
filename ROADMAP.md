@@ -587,18 +587,38 @@ gets real focus before the next starts.
       standard the earlier safety incident demanded before trusting
       this again.
 
-### 3. Find more real, sophisticated malicious samples; push recall further (WAITING)
-- [ ] Source additional high-quality real malicious skill datasets
-      beyond the two already validated against
-- [ ] Rework detection based on what's found, same discipline as
+### 3. Find more real, sophisticated malicious samples; push recall further (COMPLETE)
+- [x] Source additional high-quality real malicious skill datasets
+      beyond the two already validated against - mined much deeper
+      into MalSkillBench specifically (1200-sample batches, then the
+      full 3,944-sample set) rather than adding a third dataset,
+      since real, severe, undetected attacks kept surfacing.
+- [x] Rework detection based on what's found, same discipline as
       always: every change reports both recall and false-positive
       impact, verified against the full real dataset, not just the
-      new samples
-- [ ] Goal is stated as "as high as possible" - honest framing to hold
-      onto here: there is a real ceiling (see BENCHMARK.md's "Honest
-      limitation" section - Self-Mutating Poisoning and dynamically-
-      generated payloads are structurally undetectable by any
-      pre-execution read). "Maximum achievable," not literal 100%.
+      new samples. Found and fixed 7 genuinely distinct real patterns
+      this round: broadened safety-bypass phrasing, system-level
+      (cron/systemd) persistence, subprocess.check_output/check_call +
+      SUID-bit privilege escalation, ransomware/ransom-note detection
+      (the single largest gain), bare-IP detection via low-level
+      connection APIs, reverse-shell detection (dup2 + socket), and
+      shell command-substitution credential theft. One pattern was
+      built, found colliding with legitimate security documentation on
+      both datasets, and removed rather than shipped fragile - replaced
+      with a safer fix to an already-proven pattern instead. A
+      large-scale (4,000-sample) false-positive run also surfaced and
+      fixed a real, systemic bug (HEARTBEAT.md) that smaller samples
+      hadn't caught clearly.
+- [x] Goal is stated as "as high as possible" - final, full-dataset
+      (not sampled) results: MalSkillBench 62.9% (2,481/3,944),
+      MaliciousSkillBench 60.2% (4,528/7,526), MalSkillBench benign
+      ~90.1% (3,604/4,000) clean. Honest framing held throughout: there
+      is a real ceiling (Self-Mutating Poisoning and dynamically-
+      generated payloads remain structurally undetectable by any
+      pre-execution read, documented in BENCHMARK.md), and the
+      remaining false-positive gap at scale is almost entirely two
+      already-accepted, deliberate tradeoffs, not new bugs. Full story
+      in BENCHMARK.md's "Tier 4.3 complete" section.
 
 ### 4. LLM-layer stats at full scale; explore "reinforcing" it (WAITING)
 - [ ] Run the LLM-review layer against the full real dataset(s), not
