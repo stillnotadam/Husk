@@ -1792,6 +1792,69 @@ def find_sensitive_data_logging(text):
     return findings
 
 
+def find_macos_jxa_execution(text):
+    """
+    Module 29: macOS osascript JXA (JavaScript for Automation) execution.
+
+    Technique inspiration: skillscan-security's MAL-013 rule. osascript
+    with JavaScript (`-l JavaScript`) grants arbitrary system-level
+    scripting access on macOS (file system, other applications, shell
+    commands via doShellScript, ObjC bridge access via ObjC.import) - a
+    real, well-known technique used by macOS malware and red-team
+    tooling specifically because it's a signed, trusted system binary,
+    which makes AV/EDR products less likely to flag it.
+    """
+    findings = []
+    pattern = re.compile(
+        r"\bosascript\b[^\n]{0,180}(?:-l\s*JavaScript|ObjC\.import\(|doShellScript)",
+        re.IGNORECASE,
+    )
+    for match in pattern.finditer(text):
+        line_num = text[:match.start()].count("\n") + 1
+        findings.append(
+            f"Line {line_num}: macOS osascript JavaScript-for-Automation "
+            f"execution ('{match.group(0)[:70]}') - grants arbitrary "
+            f"system-level scripting access (filesystem, other apps, "
+            f"shell commands) via a signed, trusted system binary, a "
+            f"real technique used by macOS malware specifically because "
+            f"it's less likely to be flagged than an unsigned binary."
+        )
+    return findings
+
+
+def find_container_privilege_escalation(text):
+    """
+    Module 30: Docker socket access / privileged container execution.
+
+    Technique inspiration: skillscan-security's MAL-026/027 rules.
+    Two real, well-known container-escape primitives: mounting the
+    Docker socket (/var/run/docker.sock) into a container grants that
+    container root-equivalent access to the HOST (it can launch new,
+    unrestricted containers via the host's own Docker daemon); running
+    with --privileged or adding dangerous capabilities (SYS_ADMIN,
+    NET_ADMIN, DAC_OVERRIDE) grants broad access that defeats normal
+    container isolation.
+    """
+    findings = []
+    docker_socket = re.compile(
+        r"(?:docker\.sock|/var/run/docker\.sock|--mount[^\n]{0,100}docker\.sock|-v\s+[^\s]*docker\.sock)",
+        re.IGNORECASE,
+    )
+    privileged = re.compile(
+        r"(?:--privileged|--cap-add[=\s]+(?:ALL|SYS_ADMIN|SYS_PTRACE|NET_ADMIN|DAC_OVERRIDE)|"
+        r"--security-opt[=\s]+(?:no-new-privileges\s*[:=]\s*false|apparmor\s*[:=]\s*unconfined|seccomp\s*[:=]\s*unconfined))",
+        re.IGNORECASE,
+    )
+    for pattern, desc in [(docker_socket, "mounts the Docker socket into a container - grants root-equivalent host access via the host's own Docker daemon"),
+                          (privileged, "runs a container with elevated privileges/capabilities - defeats normal container isolation")]:
+        for match in pattern.finditer(text):
+            line_num = text[:match.start()].count("\n") + 1
+            findings.append(
+                f"Line {line_num}: {desc} ('{match.group(0)[:60]}')."
+            )
+    return findings
+
+
 def scan_skill_file(path):
     try:
         with open(path, "r", encoding="utf-8", errors="replace") as f:
@@ -1910,6 +1973,12 @@ def scan_skill_file(path):
 
     # Check 28: sensitive data logged in output
     findings.extend(find_sensitive_data_logging(text))
+
+    # Check 29: macOS osascript JXA execution
+    findings.extend(find_macos_jxa_execution(text))
+
+    # Check 30: Docker socket / privileged container escalation
+    findings.extend(find_container_privilege_escalation(text))
 
     # Check 20e: self-incriminating attack-description language
     # REMOVED after real-world testing: "attacker-controlled" collided
