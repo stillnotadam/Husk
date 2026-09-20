@@ -1543,6 +1543,61 @@ def find_self_modification_pattern(text):
     return findings
 
 
+def find_capability_declaration_mismatch(text):
+    """
+    Module 23: declared vs. actual capability mismatch.
+
+    Technique inspiration: skillscan-security's PSV-001/002/003 rules
+    (its source was read directly as part of this project's competitor
+    research). A genuinely different angle from every other check in
+    this file: instead of asking "is this pattern dangerous," it asks
+    "does this skill's ACTUAL behavior match what it DECLARED it would
+    do." A skill whose frontmatter explicitly limits itself to
+    'allowed-tools: Read' but whose instructions/code make network
+    calls, write files, or execute shell commands has a real,
+    meaningful gap between its stated and actual capabilities -
+    suspicious regardless of what the specific network call or file
+    write does, because the mismatch itself is the signal.
+
+    Deliberately scoped to only fire when allowed-tools IS explicitly
+    present (an intentional, limited declaration) - a skill with no
+    allowed-tools field at all hasn't made any promise to compare
+    against, so silence there is not evidence of anything.
+    """
+    findings = []
+    allowed_match = re.search(r'^allowed-tools:\s*(.+)$', text, re.MULTILINE)
+    if not allowed_match:
+        return findings
+    declared = allowed_match.group(1).lower()
+
+    CAPABILITY_CHECKS = [
+        ("network", ["bash", "webfetch", "*"],
+         r"(curl\s+|requests\.(get|post|put)\s*\(|urllib\.request|fetch\s*\(|http\.client|socket\.connect)"),
+        ("filesystem write", ["bash", "write", "edit", "*"],
+         r"open\s*\([^)]*['\"]w"),
+        ("shell execution", ["bash", "*"],
+         r"(subprocess\.(run|call|popen|check_output)|os\.system)\s*\("),
+    ]
+
+    for capability_name, allowed_keywords, behavior_pattern in CAPABILITY_CHECKS:
+        already_declared = any(kw in declared for kw in allowed_keywords)
+        if already_declared:
+            continue
+        behavior_match = re.search(behavior_pattern, text, re.IGNORECASE)
+        if behavior_match:
+            line_num = text[:behavior_match.start()].count("\n") + 1
+            findings.append(
+                f"Line {line_num}: performs {capability_name} "
+                f"('{behavior_match.group(0)[:40]}') but this is not "
+                f"declared in this skill's own allowed-tools frontmatter "
+                f"('{allowed_match.group(1).strip()}') - a real gap "
+                f"between what the skill claims it will do and what it "
+                f"actually does."
+            )
+
+    return findings
+
+
 def scan_skill_file(path):
     try:
         with open(path, "r", encoding="utf-8", errors="replace") as f:
@@ -1643,6 +1698,9 @@ def scan_skill_file(path):
 
     # Check 22: agent/skill self-modification (partial SMP mitigation)
     findings.extend(find_self_modification_pattern(text))
+
+    # Check 23: declared vs. actual capability mismatch
+    findings.extend(find_capability_declaration_mismatch(text))
 
     # Check 20e: self-incriminating attack-description language
     # REMOVED after real-world testing: "attacker-controlled" collided
