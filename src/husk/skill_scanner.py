@@ -64,6 +64,39 @@ DANGEROUS_PATTERNS = [
     (r"Invoke-Expression|IEX\s*\(", "PowerShell dynamic code execution (Invoke-Expression/IEX)"),
     (r"-EncodedCommand\b", "PowerShell encoded (base64) command execution - common obfuscation technique"),
     (r"DownloadString\s*\(|DownloadFile\s*\(", "PowerShell downloads and often executes remote content"),
+    # Language-specific shell/process execution - Python's subprocess/
+    # os.system and PowerShell's Invoke-Expression already had dedicated
+    # coverage; Rust, Go, and Ruby files were only ever scanned with
+    # generic, language-agnostic patterns (curl|bash, bare-IP, secrecy
+    # language) until now.
+    (r"Command::new\s*\(\s*[\"'](sh|bash|cmd|powershell|cmd\.exe)[\"']", "Rust: spawns a shell interpreter (std::process::Command) - the specific configuration that opens shell-injection risk, not subprocess use in general"),
+    (r"exec\.Command\s*\(\s*[\"'](sh|bash|cmd|powershell|cmd\.exe)[\"']", "Go: spawns a shell interpreter (os/exec) - the specific configuration that opens shell-injection risk, not subprocess use in general"),
+    # Ruby's system()/exec() have two real forms: system('open', url) is
+    # SAFE (multiple separate arguments, no shell interpreter involved -
+    # equivalent to Python's subprocess with shell=False), while
+    # system("rm -rf / | curl evil.com") is RISKY (a single shell-
+    # interpreted string). Found as a real false positive via testing:
+    # a legitimate oauth_renew.rb used system('open', auth_url) to open
+    # a browser. Requiring the matched string to contain a space
+    # (a real command LINE, not a bare single-word executable name)
+    # distinguishes the two forms without needing full Ruby parsing.
+    #
+    # A second, more surprising real false positive: the bare word
+    # "system" followed by "(" and a quoted string also matches AI/LLM
+    # API documentation showing a "system" prompt parameter, e.g.
+    # system("You are a helpful coding assistant.") in a README - not
+    # Ruby code at all. Since skill files are specifically about AI
+    # agents, this collision is common, not a rare edge case. Fixed by
+    # requiring the matched string to actually look like a shell
+    # command: Ruby string interpolation (#{...}, itself confirms real
+    # Ruby code), a shell metacharacter (&&, ||, ;, |), or a recognized
+    # Unix command name - natural-language AI prompts essentially never
+    # contain any of these, while real shell-command strings passed to
+    # system() almost always do.
+    (r"Kernel\.exec\s*\(|"
+     r"\bsystem\s*\(\s*[\"'][^\"']*(#\{|&&|\|\||[;|]|\b(chmod|rm|curl|wget|bash|sh|nc|mkfifo)\b)[^\"']*[\"']|"
+     r"%x\{",
+     "Ruby: executes a shell command (Kernel#exec/system/%x)"),
 ]
 
 
