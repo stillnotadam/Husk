@@ -31,6 +31,7 @@ Claude model, not this project's own engineering (see README.md).
 | SkillSpector (NVIDIA, 14.2k stars) | **Win at matched confidence**; their loose mode has a 78% false-positive rate |
 | SkillFortify | **Clean win**, both axes, despite their "formal verification" claim |
 | Cisco AI Defense Skill Scanner | **Clean win**, both axes |
+| skillfrisk | **Clean win**, both axes |
 
 ## What this static engine cannot do, by design
 
