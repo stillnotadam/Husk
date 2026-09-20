@@ -7,16 +7,25 @@ name = "husk-scanner"
 version = "0.1.0"
 description = "Static security scanner for AI agent skill packages - built and adversarially self-tested against documented bypass techniques, validated against real confirmed-malicious samples."
 readme = "README.md"
-license = {text = "MIT"}
+license = "MIT"
 requires-python = ">=3.9"
 authors = [
     {name = "Adam"},
 ]
+keywords = [
+    "security", "ai-agents", "skill-packages", "static-analysis",
+    "malware-detection", "mcp", "claude", "llm-security",
+]
 classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Developers",
+    "Intended Audience :: Information Technology",
     "Programming Language :: Python :: 3",
-    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3 :: Only",
     "Operating System :: OS Independent",
     "Topic :: Security",
+    "Topic :: Software Development :: Quality Assurance",
+    "Environment :: Console",
 ]
 dependencies = []
 
@@ -25,7 +34,9 @@ dev = ["pytest>=7.0"]
 
 [project.urls]
 Homepage = "https://github.com/YOUR-USERNAME/husk"
+Repository = "https://github.com/YOUR-USERNAME/husk"
 Benchmark = "https://github.com/YOUR-USERNAME/husk/blob/main/BENCHMARK.md"
+"Bug Tracker" = "https://github.com/YOUR-USERNAME/husk/issues"
 
 [project.scripts]
 husk = "husk.cli:main"
