@@ -136,7 +136,7 @@ def review_skill_with_llm(content, api_key=None, model="claude-sonnet-5"):
         prompt = REVIEW_PROMPT_TEMPLATE.format(content=content[:15000])
         body = json.dumps({
             "model": model,
-            "max_tokens": 300,
+            "max_tokens": 600,
             "messages": [{"role": "user", "content": prompt}],
         }).encode("utf-8")
 
