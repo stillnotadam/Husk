@@ -122,18 +122,32 @@ def test_shell_scripts_are_sandboxed():
     assert "Processing complete" in result["stdout"]
 
 
+def test_ruby_is_sandboxed():
+    """Real multi-language support: Ruby execution and file-creation
+    detection, now that a real interpreter is available in this
+    environment (installed via apt-get install ruby)."""
+    if shutil.which("ruby") is None:
+        pytest.skip("ruby not installed in this environment")
+    result = sandbox_run_script(os.path.join(FIXTURE_DIR, "creates_unexpected_file.rb"))
+    assert result["executed"] is True
+    assert result["exit_code"] == 0
+    assert "unexpected_marker_rb.txt" in result["files_created"]
+
+
 def test_unsupported_extension_degrades_gracefully():
-    """A file type with no configured interpreter (or one that isn't
-    actually installed) must be skipped cleanly, not crash."""
-    with tempfile.NamedTemporaryFile(suffix=".rb", delete=False) as f:
-        f.write(b"puts 'hello'")
-        rb_path = f.name
+    """A file type with no configured interpreter at all (not one of
+    LANGUAGE_INTERPRETERS' extensions) must be skipped cleanly, not
+    crash. Uses .php - genuinely unsupported, unlike .rb which is now
+    real dynamic sandboxing support (ruby was installed)."""
+    with tempfile.NamedTemporaryFile(suffix=".php", delete=False) as f:
+        f.write(b"<?php echo 'hello'; ?>")
+        php_path = f.name
     try:
-        result = sandbox_run_script(rb_path)
+        result = sandbox_run_script(php_path)
         assert result["executed"] is False
         assert len(result["findings"]) == 1
     finally:
-        os.unlink(rb_path)
+        os.unlink(php_path)
 
 
 def test_never_raises_on_a_nonexistent_script():
