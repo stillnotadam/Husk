@@ -7,9 +7,9 @@ See README.md and BENCHMARK.md for the full story, including honest
 limitations.
 """
 
-from .skill_scanner import scan_skill_file
 from .package_scanner import scan_package
 from .pickle_scanner import scan_file as scan_pickle_file
+from .skill_scanner import scan_skill_file
 
 __version__ = "0.1.0"
 __all__ = ["scan_skill_file", "scan_package", "scan_pickle_file"]

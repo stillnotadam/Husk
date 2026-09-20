@@ -6,8 +6,8 @@ in-scope success case, and the honest v1 boundary (cross-function flow,
 deliberately out of scope, documented rather than silently missed).
 """
 
-import sys
 import os
+import sys
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "src"))
 from husk.taint_analysis import analyze_taint_flows  # noqa: E402

@@ -58,7 +58,7 @@ fully general case of arbitrary-depth cross-function data flow.
 """
 
 import ast
-
+import warnings
 
 # Function/attribute names whose return value should be treated as
 # potentially sensitive (credentials, secrets, environment data).
@@ -270,7 +270,6 @@ def analyze_taint_flows(source_code, filename="<skill script>"):
     still run over it regardless).
     """
     try:
-        import warnings
         with warnings.catch_warnings():
             warnings.simplefilter("ignore")
             tree = ast.parse(source_code, filename=filename)
@@ -390,9 +389,7 @@ def analyze_taint_flows(source_code, filename="<skill script>"):
             # testing (paths defined once, opened later via the loop
             # variable, often not even in the same statement).
             if isinstance(stmt, ast.For) and isinstance(stmt.target, ast.Name):
-                if _list_contains_credential_marker(stmt.iter):
-                    tainted[stmt.target.id] = "a credential-shaped path from a list of targets"
-                elif isinstance(stmt.iter, ast.Name) and stmt.iter.id in credential_list_vars:
+                if _list_contains_credential_marker(stmt.iter) or isinstance(stmt.iter, ast.Name) and stmt.iter.id in credential_list_vars:
                     tainted[stmt.target.id] = "a credential-shaped path from a list of targets"
                 elif isinstance(stmt.iter, ast.Name) and stmt.iter.id in tainted:
                     tainted[stmt.target.id] = tainted[stmt.iter.id]

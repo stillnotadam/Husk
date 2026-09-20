@@ -288,7 +288,7 @@ def find_split_base64(text):
     PROXIMITY_LINES = 8
 
     fragments = []
-    for match in re.finditer(r"[A-Za-z0-9+/]{%d,%d}={0,2}" % (MIN_FRAGMENT_LEN, MIN_SUSPICIOUS_B64_LENGTH - 1), text):
+    for match in re.finditer(rf"[A-Za-z0-9+/]{{{MIN_FRAGMENT_LEN},{MIN_SUSPICIOUS_B64_LENGTH - 1}}}={{0,2}}", text):
         if _is_part_of_url(text, match.start()) or _looks_like_path_not_base64(match.group(0)) or _looks_like_identifier_not_base64(match.group(0)) or _looks_like_hex_address_not_base64(text, match.start(), match.group(0)) or _is_sri_hash_not_base64(text, match.start()):
             continue
         line_num = text[:match.start()].count("\n") + 1
@@ -324,7 +324,11 @@ def find_split_base64(text):
             )
             for n in nested:
                 findings.append(f"  -> Inside reassembled blob: {n}")
-        except Exception:
+        except Exception:  # noqa: S110 - explicitly acknowledged, see the comment below
+            # Not valid base64, or not decodable as text - the split-
+            # fragment finding above already captured the real signal;
+            # a failed re-scan of the reassembled content isn't itself
+            # an error worth surfacing.
             pass
 
     return findings
@@ -429,7 +433,7 @@ def find_suspicious_base64(text):
     """
     findings = []
     # base64 alphabet, long contiguous runs only
-    candidates = re.finditer(r"[A-Za-z0-9+/]{%d,}={0,2}" % MIN_SUSPICIOUS_B64_LENGTH, text)
+    candidates = re.finditer(rf"[A-Za-z0-9+/]{{{MIN_SUSPICIOUS_B64_LENGTH},}}={{0,2}}", text)
 
     for match in candidates:
         blob = match.group(0)
@@ -449,13 +453,13 @@ def find_suspicious_base64(text):
             # Python bytecode files start with a specific magic number;
             # even without decoding it fully, this is a strong signal.
             if decoded_bytes[:1] == b"\x00" or decoded_bytes[:4].hex().startswith("0d0d"):
-                findings.append(f"  -> Decoded content looks like compiled bytecode, not text.")
+                findings.append("  -> Decoded content looks like compiled bytecode, not text.")
 
             decoded_text = decoded_bytes.decode("utf-8", errors="ignore")
             nested = scan_for_dangerous_patterns(decoded_text)
             for n in nested:
                 findings.append(f"  -> Inside decoded blob: {n}")
-        except Exception:
+        except Exception:  # noqa: S110 - explicitly acknowledged: the finding above already captured the signal; a failed re-scan attempt isn't itself worth surfacing
             # Not valid base64, or not decodable as text - the encoded
             # block itself is still worth the flag above.
             pass
@@ -700,7 +704,7 @@ def find_fake_prerequisite_socialengineering(text):
     PASTE_SITE_PATTERN = r"(glot\.io|rentry\.co|pastebin\.com|paste\.ee|hastebin\.com|paste\.sh)"
     TERMINAL_ACTION_PATTERN = r"(terminal|copy.{0,20}(script|command)|paste it)"
 
-    PASSWORD_ARCHIVE_PATTERN = r"((?:password|pass\s*:)[:\s]+[`'\"]?\w+[`'\"]?).{0,30}(extract|unzip)|((extract|unzip).{0,30}(?:password|pass\s*:)[:\s]+[`'\"]?\w+)"
+    PASSWORD_ARCHIVE_PATTERN = r"((?:password|pass\s*:)[:\s]+[`'\"]?\w+[`'\"]?).{0,30}(extract|unzip)|((extract|unzip).{0,30}(?:password|pass\s*:)[:\s]+[`'\"]?\w+)"  # noqa: S105 - this is a detection PATTERN for password-protected-archive attacks, not an actual credential
 
     REQUIRE_FRAMING_PATTERN = r"(requires? (?:the )?[\w\-]+ (?:utility|agent|cli|tool) (?:to function|for [\w\s]{1,30}(?:operations?|purposes?))|without [\w\-]+ installed[^.]{0,40}(?:will not work|won.t work|will not function))"
     # Broadened after real-world testing: an earlier version only
@@ -887,9 +891,7 @@ def _is_private_ip(ip_str):
         return True
     if parts[0] == 127:
         return True
-    if parts[0] == 169 and parts[1] == 254:
-        return True
-    return False
+    return bool(parts[0] == 169 and parts[1] == 254)
 
 
 def find_exfil_to_raw_ip(text):
@@ -1857,7 +1859,7 @@ def find_container_privilege_escalation(text):
 
 def scan_skill_file(path):
     try:
-        with open(path, "r", encoding="utf-8", errors="replace") as f:
+        with open(path, encoding="utf-8", errors="replace") as f:
             text = f.read()
     except OSError as e:
         return {"verdict": "ERROR", "findings": [f"Could not read file: {e}"]}

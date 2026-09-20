@@ -8,14 +8,15 @@ Usage:
 """
 
 import argparse
+import glob
 import os
 import sys
 
-from .skill_scanner import scan_skill_file
+from .llm_review import review_skill_with_llm
 from .package_scanner import scan_package
 from .pickle_scanner import scan_file as scan_pickle_file
-from .llm_review import review_skill_with_llm
 from .sandbox import sandbox_run_script
+from .skill_scanner import scan_skill_file
 
 
 def _print_result(verdict, findings, label):
@@ -32,7 +33,7 @@ def cmd_skill(args):
 
     if args.llm_review:
         print("--- Backup: LLM semantic review (Anthropic Claude, not Husk's own logic) ---")
-        with open(args.path, "r", encoding="utf-8", errors="replace") as f:
+        with open(args.path, encoding="utf-8", errors="replace") as f:
             content = f.read()
         review = review_skill_with_llm(content)
         if not review["available"]:
@@ -57,7 +58,6 @@ def cmd_package(args):
     exit_code = _print_result(verdict, findings, "package")
 
     if args.sandbox:
-        import glob
         print("--- Basic dynamic sandbox (actually RUNS scripts - Python/JS/shell/Ruby/Rust/Go - see README.md for real limits) ---")
         scripts = []
         for ext in ("*.py", "*.js", "*.sh", "*.rb", "*.rs", "*.go"):

@@ -43,3 +43,57 @@ husk = "husk.cli:main"
 
 [tool.setuptools.packages.find]
 where = ["src"]
+
+[tool.ruff]
+line-length = 120
+target-version = "py39"
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "UP", "SIM", "S", "BLE", "PL"]
+ignore = [
+    # Deliberately, consistently allowed project-wide: this tool needs
+    # to degrade gracefully rather than crash on unexpected failures -
+    # LLM API calls, sandbox subprocess execution, pickle/base64
+    # decoding of untrusted content. Each site is already documented
+    # with a comment explaining why a broad catch is the right choice
+    # there specifically, not a one-off shortcut.
+    "BLE001",
+    # Also deliberate: every long line here is a regex pattern or a
+    # long, explicit description string for a finding message.
+    # Mechanically wrapping these to fit a line-length limit risks
+    # introducing a real bug (a misplaced line break inside a regex
+    # pattern is exactly the class of mistake this project has been
+    # careful to avoid throughout - several real precision bugs this
+    # session came from exactly this kind of subtle regex error).
+    # Explicit over terse is the deliberate style choice here.
+    "E501",
+    # Also deliberate: every flagged "magic value" here is either a
+    # well-known network/protocol constant (127, 169, 254, 172,
+    # 16-31, 192, 168 - the actual RFC 1918 private-IP-range octets,
+    # genuinely MORE readable as literals matching the real spec than
+    # behind an arbitrarily-named local constant) or a small,
+    # self-explanatory detection threshold with surrounding context
+    # explaining it. Wrapping each in a locally-scoped constant name
+    # would add indirection without adding real clarity.
+    "PLR2004",
+    # Also deliberate: PLR0911/0912/0915 flag functions with many
+    # return statements/branches/lines - expected and appropriate for
+    # this project's orchestrator functions (scan_skill_file legitimately
+    # chains ~28 sequential detection checks; that's the whole point of
+    # the function). Splitting it into artificial sub-functions purely
+    # to satisfy a line-count metric, on a 2000+ line file with
+    # extensive existing test coverage validating current behavior,
+    # would add real refactor risk for no correctness or security
+    # benefit - a genuine architectural simplification is a larger,
+    # deliberate undertaking, not a lint-driven one.
+    "PLR0911", "PLR0912", "PLR0915",
+]
+
+[tool.ruff.lint.per-file-ignores]
+# Test files: sys.path manipulation before imports is the established
+# pattern across this test suite (no installed-package assumption),
+# and S101 (no-assert) is a false positive here - pytest's whole
+# mechanism relies on bare assert statements in tests, this rule
+# exists for production code where asserts get stripped in optimized
+# mode.
+"tests/*" = ["E402", "S101"]

@@ -71,8 +71,6 @@ import subprocess
 import sys
 import tempfile
 import time
-import warnings
-
 
 BWRAP_AVAILABLE = shutil.which("bwrap") is not None
 UNSHARE_AVAILABLE = shutil.which("unshare") is not None
@@ -146,13 +144,20 @@ def _bwrap_isolation_works():
         return False
     if not hasattr(_bwrap_isolation_works, "_cached"):
         try:
-            proc = subprocess.run(
-                ["bwrap", "--ro-bind", "/usr", "/usr", "--ro-bind", "/lib", "/lib",
+            # Resolved to a full path (not a bare "bwrap") so this
+            # verification check itself can't be affected by PATH
+            # manipulation - the actual sandboxed execution already
+            # runs under a restricted PATH env, but this check runs in
+            # OUR OWN process's inherited environment, so it deserves
+            # the same discipline.
+            bwrap_path = shutil.which("bwrap") or "bwrap"
+            proc = subprocess.run(  # noqa: S603 - fixed args, resolved binary path, not untrusted input
+                [bwrap_path, "--ro-bind", "/usr", "/usr", "--ro-bind", "/lib", "/lib",
                  "--ro-bind", "/lib64", "/lib64", "--ro-bind", "/bin", "/bin",
                  "--unshare-all", "--die-with-parent",
                  "--", "/usr/bin/python3", "-c",
                  "import os; assert not os.path.exists('/etc/hostname_marker_that_should_not_exist_anyway') and not os.path.isdir('/root')"],
-                capture_output=True, timeout=5,
+                capture_output=True, timeout=5, check=False,
             )
             _bwrap_isolation_works._cached = proc.returncode == 0
         except Exception:
@@ -167,10 +172,13 @@ def _unshare_isolation_works():
         return False
     if not hasattr(_unshare_isolation_works, "_cached"):
         try:
-            proc = subprocess.run(
-                ["unshare", "--net", "--", "python3", "-c",
+            # Same discipline as the bwrap check above - resolved to a
+            # full path rather than a bare name.
+            unshare_path = shutil.which("unshare") or "unshare"
+            proc = subprocess.run(  # noqa: S603 - fixed args, resolved binary path, not untrusted input
+                [unshare_path, "--net", "--", "python3", "-c",
                  "import socket; socket.create_connection(('8.8.8.8', 53), timeout=2)"],
-                capture_output=True, timeout=5,
+                capture_output=True, timeout=5, check=False,
             )
             _unshare_isolation_works._cached = proc.returncode != 0
         except Exception:
@@ -242,7 +250,7 @@ def _compile_if_needed(script_abs_path, workdir):
             cmd = compiler + ["-o", binary_path, script_abs_path]
         else:  # .go
             cmd = compiler + [binary_path, script_abs_path]
-        proc = subprocess.run(cmd, capture_output=True, text=True, timeout=30)
+        proc = subprocess.run(cmd, capture_output=True, text=True, timeout=30, check=False)  # noqa: S603 - compiling untrusted source is this module's actual job; sandboxed execution follows
         if proc.returncode != 0:
             return None, (
                 f"Could not compile {ext} source for dynamic analysis "
@@ -251,7 +259,7 @@ def _compile_if_needed(script_abs_path, workdir):
                 f"security assessment either way): "
                 f"{proc.stderr.strip()[:300]}"
             )
-        os.chmod(binary_path, 0o755)
+        os.chmod(binary_path, 0o755)  # noqa: S103 - our own freshly-compiled binary, not a permission set on untrusted input
         return binary_path, None
     except Exception as e:
         return None, f"Compilation step failed: {e}"
@@ -456,7 +464,7 @@ def _sandbox_run(script_path, timeout=WALL_CLOCK_TIMEOUT_SECONDS):
             # the higher ceiling; Python and shell/Ruby keep the tight
             # one.
             as_limit_mb = 4096 if ext_for_compile == ".go" or ext == ".js" else MEMORY_LIMIT_MB
-            proc = subprocess.run(
+            proc = subprocess.run(  # noqa: S603 - this IS the sandbox: running untrusted skill code is the module's entire purpose, under the isolation/resource-limits built up throughout this file
                 command,
                 cwd=workdir,
                 env=restricted_env,
@@ -464,6 +472,7 @@ def _sandbox_run(script_path, timeout=WALL_CLOCK_TIMEOUT_SECONDS):
                 text=True,
                 timeout=timeout,
                 preexec_fn=lambda: _apply_resource_limits(as_limit_mb),
+                check=False,
             )
             result["executed"] = True
             result["exit_code"] = proc.returncode

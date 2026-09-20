@@ -39,7 +39,7 @@ and never blocks the (free) static result.
 
 import json
 import os
-
+import urllib.request
 
 REVIEW_PROMPT_TEMPLATE = """You are reviewing a file called SKILL.md, which \
 contains instructions an AI coding agent will read and follow. Your job is \
@@ -131,8 +131,6 @@ def review_skill_with_llm(content, api_key=None, model="claude-sonnet-5"):
         }
 
     try:
-        import urllib.request
-
         prompt = REVIEW_PROMPT_TEMPLATE.format(content=content[:15000])
         body = json.dumps({
             "model": model,
@@ -155,7 +153,7 @@ def review_skill_with_llm(content, api_key=None, model="claude-sonnet-5"):
                 "anthropic-version": "2023-06-01",
             },
         )
-        with urllib.request.urlopen(req, timeout=30) as resp:
+        with urllib.request.urlopen(req, timeout=30) as resp:  # noqa: S310 - fixed https:// URL to Anthropic's own API, not user-controlled
             data = json.loads(resp.read().decode("utf-8"))
 
         text = "".join(

@@ -20,9 +20,9 @@ layers deep, using the same checks from skill_scanner.py.
 """
 
 import os
-import zipfile
-import tempfile
 import sys
+import tempfile
+import zipfile
 
 # Import the module-1 and module-2 checks so archive contents get the
 # full treatment, not a separate weaker pass.

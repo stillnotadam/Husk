@@ -10,6 +10,7 @@ import os
 import shutil
 import sys
 import tempfile
+import warnings
 
 import pytest
 
@@ -64,7 +65,6 @@ def test_network_isolation_is_kernel_enforced_not_just_environmental():
     if result["isolation_level"] != "none (resource limits only)":
         assert "NETWORK_CALL_BLOCKED" in result["stdout"]
     else:
-        import warnings
         warnings.warn(
             "No real isolation was active for this test run - sandbox "
             "fell back to relying on the host's own network restrictions. "
@@ -88,7 +88,6 @@ def test_filesystem_isolation_is_real_when_bubblewrap_is_available():
         assert "READ_ROOT_BLOCKED" in result["stdout"]
         assert "WRITE_OUTSIDE_BLOCKED" in result["stdout"]
     else:
-        import warnings
         warnings.warn(
             f"Filesystem isolation not active for this test run "
             f"(isolation_level={result['isolation_level']!r}) - real "
