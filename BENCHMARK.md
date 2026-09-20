@@ -1217,3 +1217,53 @@ catching a supply-chain-style attack where a previously-benign,
 already-trusted skill gets quietly modified. Worth naming as a real
 gap in Husk's own scope, not just a feature the other tool happens to
 have.
+
+---
+
+# Consolidated comparison: every competitor, one table
+
+Direct response to a request for one clear picture. Every number below
+is real, tested this session (several scaled up specifically for this
+table, not just reused from earlier smaller runs), on real malicious
+samples from MaliciousSkillBench and real legitimate skills from the
+established 249-skill baseline. Sample sizes differ by tool because
+scan speed differs enormously (0.3s/scan for the fastest tool tested
+to 6s+/scan for the slowest) - noted honestly for every row rather
+than presented as uniform when it isn't.
+
+| Tool | Recall (real malicious) | Precision (real legitimate, full 249 set unless noted) |
+|---|---|---|
+| **Husk (this project)** | **61.5% (4,625/7,526, full dataset)** / **64.4% (2,540/3,944, full dataset, second independent benchmark)** | **98.0% (244/249)** |
+| skillfrisk | 51.7% (n=800, random) | 91.6% (228/249) |
+| SkillFortify | 57.0% (n=400, random) | 81.5% (203/249) |
+| agent-audit | 45.8% (n=400, random) | 92.8% (231/249) |
+| agent-audit-kit (loose - any finding) | 91.5% (n=400, random) | 59.0% (147/249) |
+| agent-audit-kit (strict - high/critical only) | 27.0% (n=400, random) | 93.6% (233/249) |
+| SkillSpector (NVIDIA, loose) | 92.5% (n=80 only - ~4s/scan makes a larger run impractical in one session) | 22.0% (n=50 only, same reason) |
+| SkillSpector (NVIDIA, strict) | 61.25% (n=80) | 60.0% (n=50) |
+| Cisco AI Defense Skill Scanner | 56.7% (n=30 only - ~6s/scan) | 80.0% (n=30) |
+| Snyk Agent Scan | **No number obtainable** - real analysis endpoint returns 403 even with valid tokens, confirmed directly (see the dedicated section earlier in this document) |
+
+## Reading this honestly
+
+At matched precision (comparing each tool's *strict* reading against
+Husk, since a loose "any finding" reading is a different, much noisier
+product decision - see the individual benchmark sections above for
+the full reasoning), **Husk has the best combination of recall and
+precision of every tool tested**, static analysis only, no LLM.
+
+The tools with higher *raw* recall than Husk (agent-audit-kit and
+SkillSpector, both in loose mode) achieve it by accepting a much
+higher false-positive rate - 41-78% of real legitimate skills wrongly
+flagged, a rate that would make either tool unusable as an automated
+gate rather than a human-reviewed triage list. That tradeoff is
+documented honestly in each tool's own dedicated section above, not
+hidden here.
+
+Husk's own full-dataset numbers (61.5%/64.4%) come from scanning every
+single sample in two complete, independent real-world datasets -
+7,526 and 3,944 samples respectively, not a few hundred. No other
+tool's numbers above reflect that same completeness, for the honest,
+stated reason: per-scan speed made it impractical within a single
+session. This is a real, stated limitation of this comparison, not
+something to gloss over.
