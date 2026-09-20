@@ -293,6 +293,38 @@ def _build_sandbox_command(script_abs_path, workdir, interpreter):
         cmd = ["bwrap"]
         for d in SYSTEM_DIRS_TO_BIND:
             cmd += ["--ro-bind", d, d]
+        # The interpreter itself might live outside every bound system
+        # directory - found via a real bug testing a fresh virtual
+        # environment install (the standard, recommended way to install
+        # this project): sys.executable pointed to
+        # <venv>/bin/python3, which bwrap couldn't find at all
+        # ("execvp: No such file or directory"). bwrap needs the EXACT
+        # path we're about to exec to be visible in the sandbox - for a
+        # symlinked venv interpreter (python3 -m venv's default), that
+        # means binding the symlink's OWN directory so bwrap can find
+        # and read it; the kernel then resolves the symlink naturally
+        # at exec time, reaching the real system Python, which is
+        # already bound separately via SYSTEM_DIRS_TO_BIND. For a
+        # --copies-style venv (the actual binary file lives directly in
+        # the venv, no symlink), this same bind is what makes the real
+        # binary reachable at all.
+        if interpreter:
+            # interpreter[0] isn't always an absolute path (only Python
+            # uses sys.executable; JS/shell/Ruby use bare names like
+            # "node" looked up via PATH) - resolve via shutil.which()
+            # first so a bare name resolves to its real location rather
+            # than being incorrectly treated as relative to the current
+            # directory.
+            resolved = shutil.which(interpreter[0]) or interpreter[0]
+            interpreter_dir = os.path.dirname(os.path.abspath(resolved))
+            if interpreter_dir not in SYSTEM_DIRS_TO_BIND and os.path.isdir(interpreter_dir):
+                cmd += ["--ro-bind", interpreter_dir, interpreter_dir]
+            # Use the resolved absolute path in the actual command too
+            # (not just bind its directory) - this way execution
+            # doesn't depend on the sandboxed process's restricted PATH
+            # env happening to also contain wherever this interpreter
+            # really lives.
+            interpreter = [resolved] + interpreter[1:]
         # The script file itself usually lives outside every other
         # bound directory (e.g. wherever the skill package was
         # extracted to) - without binding its own directory read-only,
