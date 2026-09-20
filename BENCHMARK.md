@@ -973,3 +973,46 @@ essentially unchanged precision (90.0% vs 90.1% - within normal
 variation, not a regression) and the smaller, curated baseline held
 exactly. The gap-closing modules added real detection without trading
 away trustworthiness.
+
+---
+
+# Benchmark 5: Husk vs. SkillSpector (NVIDIA)
+
+Found via continued competitor research: SkillSpector
+(github.com/NVIDIA/SkillSpector), a large, actively-growing, NVIDIA-
+backed open-source scanner - 14.2k GitHub stars, 64 vulnerability
+patterns across 16 categories (AST walk, taint tracking, YARA
+signatures, regex analyzers). Installed via
+`pip install git+https://github.com/NVIDIA/SkillSpector`, runs fully
+offline with `--no-llm`.
+
+## Setup
+
+80-sample subset of the established 300-sample real-malicious seed
+(managing runtime - each SkillSpector scan takes ~4s, materially
+slower than Husk or the other competitors tested), and a 50-sample
+subset of the established 249-skill real legitimate baseline.
+
+## Results
+
+| | Recall (80 real malicious) | False positives (50 real legit) |
+|---|---|---|
+| **Husk** | **67.5% (54/80)** | **96.0% clean (48/50)** |
+| SkillSpector (any severity) | 92.5% (74/80) | 22.0% clean (11/50) |
+| SkillSpector (high/critical only) | 61.25% (49/80) | 60.0% clean (30/50) |
+
+At SkillSpector's loose reading, its recall is genuinely higher than
+Husk's - but at a severe precision cost: a 78% false-positive rate,
+the worst of any competitor tested in this project (worse than
+agent-audit-kit's 41% loose-mode rate). At the matched, higher-
+confidence reading, Husk wins on both axes again, consistent with
+every other precision-matched comparison in this document.
+
+## Fair caveat
+
+SkillSpector is a broader, larger tool covering categories Husk
+doesn't attempt (MCP-specific tool poisoning, memory-poisoning
+patterns, OSV.dev live CVE lookup for dependencies) - its real value
+may be greatest as a broad first-pass triage tool for a human reviewer
+to work through, not as an automated pass/fail gate, similar to the
+conclusion reached for agent-audit-kit's loose mode.
