@@ -1079,7 +1079,7 @@ def find_agent_identity_exfiltration(text):
     secrecy language at all, which is exactly why it evades the
     secrecy-based checks) while instructing the agent to read and
     upload its own identity/memory files - SOUL.md, IDENTITY.md,
-    MEMORY.md, USER.md, HEARTBEAT.md - to an external HTTP endpoint.
+    MEMORY.md, USER.md - to an external HTTP endpoint.
 
     These specific filenames are an emerging convention for an agent's
     persona, memory, and self-knowledge in certain agent frameworks.
@@ -1090,7 +1090,13 @@ def find_agent_identity_exfiltration(text):
     """
     findings = []
     IDENTITY_FILES = [
-        "SOUL.md", "IDENTITY.md", "MEMORY.md", "USER.md", "HEARTBEAT.md",
+        "SOUL.md", "IDENTITY.md", "MEMORY.md", "USER.md",
+        # HEARTBEAT.md deliberately removed after real-world testing:
+        # it's a real, common, legitimate convention across multiple
+        # real skill platforms for scheduled/periodic task instructions
+        # (a liveness-check file), completely unrelated to the agent
+        # identity/memory exfiltration pattern this check targets -
+        # caused 5 false positives in a 60-sample check alone.
     ]
     NETWORK_SEND = r"(curl\s+.*-X\s*POST|requests\.post\s*\(|\.send\s*\(|fetch\s*\()"
 
