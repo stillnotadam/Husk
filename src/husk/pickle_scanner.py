@@ -20,6 +20,13 @@ import sys
 # to run commands, touch the filesystem, or open a network connection.
 DANGEROUS_MODULES = {
     "os",
+    # "posix" and "nt" are os.system/os.popen/etc's REAL __module__ on
+    # Linux/Windows respectively - os itself just re-exports from
+    # these platform modules. Found via testing: a real pickled
+    # os.system reference serializes with module name "posix", not
+    # "os" - the "os" entry alone missed this entirely.
+    "posix",
+    "nt",
     "subprocess",
     "sys",
     "socket",
@@ -52,20 +59,44 @@ def scan_file(path):
     except OSError as e:
         return {"verdict": "ERROR", "findings": [f"Could not read file: {e}"]}
 
+    # String-pushing opcodes that can supply STACK_GLOBAL's module/name
+    # (protocol 4+ pushes these as two separate ops onto the pickle
+    # VM's stack, THEN STACK_GLOBAL combines them - unlike the older
+    # GLOBAL opcode, which encodes "module name" directly as its own
+    # arg). Found necessary via testing: STACK_GLOBAL's own `arg` from
+    # genops is always None - the real values live in the two preceding
+    # string pushes. Missing this meant EVERY pickle using protocol 4+
+    # (Python's default since 3.8) was completely invisible to this
+    # scanner, regardless of what it referenced.
+    STRING_PUSH_OPS = {
+        "SHORT_BINUNICODE", "BINUNICODE", "BINUNICODE8", "UNICODE",
+        "SHORT_BINSTRING", "BINSTRING",
+    }
+
     try:
         # genops walks the instruction stream one opcode at a time.
         # We are only ever reading; nothing here executes the pickle.
+        recent_strings = []  # last few string-push values, in order
         for opcode, arg, pos in pickletools.genops(data):
+            if opcode.name in STRING_PUSH_OPS and arg is not None:
+                recent_strings.append(str(arg))
+                recent_strings = recent_strings[-2:]
+
             if opcode.name in ("GLOBAL", "STACK_GLOBAL"):
-                # arg is typically "module name" for GLOBAL,
-                # e.g. "os system" or "subprocess Popen"
-                if arg is None:
-                    continue
-                parts = str(arg).replace("\n", " ").split()
-                if len(parts) >= 2:
-                    module, name = parts[0], parts[1]
+                if arg is not None:
+                    # Older-style GLOBAL: "module name" as one combined
+                    # string argument, e.g. "os system".
+                    parts = str(arg).replace("\n", " ").split()
+                    if len(parts) >= 2:
+                        module, name = parts[0], parts[1]
+                    else:
+                        module, name = parts[0], ""
+                elif len(recent_strings) == 2:
+                    # STACK_GLOBAL (protocol 4+): module and name were
+                    # pushed as the two preceding string opcodes.
+                    module, name = recent_strings[0], recent_strings[1]
                 else:
-                    module, name = parts[0], ""
+                    continue
 
                 if module in DANGEROUS_MODULES or name.lower() in DANGEROUS_NAMES:
                     findings.append(
