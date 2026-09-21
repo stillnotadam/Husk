@@ -75,6 +75,18 @@ import time
 BWRAP_AVAILABLE = shutil.which("bwrap") is not None
 UNSHARE_AVAILABLE = shutil.which("unshare") is not None
 
+# Single source of truth for the unshare flags used for the fallback
+# isolation level. Real bug found via a GitHub Actions CI failure: the
+# detection check and the real invocation used to list these flags
+# separately, and drifted apart (detection only tested --net, the real
+# invocation also used --pid --mount --fork). On GitHub's hosted
+# runners specifically, --net alone succeeded but the full combination
+# silently failed at actual execution time - every sandboxed run was
+# falsely reported as isolated when it wasn't. Sharing one constant
+# makes that specific class of drift structurally impossible, not just
+# tested for after the fact.
+UNSHARE_FLAGS = ["--net", "--pid", "--mount", "--fork"]
+
 # Directories bound read-only into the bubblewrap sandbox so the Python
 # interpreter itself can actually run. Only directories that exist on
 # this system are used - checked once at import time, not assumed.
@@ -167,7 +179,20 @@ def _bwrap_isolation_works():
 
 def _unshare_isolation_works():
     """Same idea as _bwrap_isolation_works, for the network+PID-only
-    fallback level. Cached after the first check."""
+    fallback level. Cached after the first check.
+
+    Real bug found via a GitHub Actions CI failure: this check
+    originally only tested `unshare --net`, while the actual sandboxed
+    execution additionally uses --pid --mount --fork. Those two things
+    can behave differently - mount-namespace creation is more
+    restricted than plain network-namespace creation on some hardened
+    or nested environments (confirmed on GitHub's hosted ubuntu-latest
+    runners specifically: --net alone succeeded, but the full
+    combination silently failed at actual sandboxed-script-execution
+    time, meaning every real run was falsely reported as isolated when
+    it wasn't). Fixed by testing the EXACT same flag combination here
+    that _build_sandbox_command actually uses, not a simplified probe.
+    """
     if not UNSHARE_AVAILABLE:
         return False
     if not hasattr(_unshare_isolation_works, "_cached"):
@@ -176,7 +201,7 @@ def _unshare_isolation_works():
             # full path rather than a bare name.
             unshare_path = shutil.which("unshare") or "unshare"
             proc = subprocess.run(  # noqa: S603 - fixed args, resolved binary path, not untrusted input
-                [unshare_path, "--net", "--", "python3", "-c",
+                [unshare_path] + UNSHARE_FLAGS + ["--", "python3", "-c",
                  "import socket; socket.create_connection(('8.8.8.8', 53), timeout=2)"],
                 capture_output=True, timeout=5, check=False,
             )
@@ -362,8 +387,9 @@ def _build_sandbox_command(script_abs_path, workdir, interpreter):
         return cmd, "bubblewrap (network + process + filesystem isolation)"
 
     if _unshare_isolation_works():
+        unshare_path = shutil.which("unshare") or "unshare"
         return (
-            ["unshare", "--net", "--pid", "--mount", "--fork", "--"]
+            [unshare_path] + UNSHARE_FLAGS + ["--"]
             + interpreter + [script_abs_path],
             "unshare (network + process isolation only)",
         )

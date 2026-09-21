@@ -15,7 +15,7 @@ import warnings
 import pytest
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "src"))
-from husk.sandbox import sandbox_run_python_script, sandbox_run_script  # noqa: E402
+from husk.sandbox import UNSHARE_FLAGS, sandbox_run_python_script, sandbox_run_script  # noqa: E402
 
 FIXTURE_DIR = os.path.join(os.path.dirname(__file__), "sandbox_fixtures")
 
@@ -221,6 +221,26 @@ def test_script_in_parent_of_workdir_still_gets_readwrite_workdir():
         assert "proof_of_writability.txt" in result["files_created"]
     finally:
         os.unlink(script_path)
+
+
+def test_unshare_detection_flags_match_real_invocation_flags():
+    """
+    Real bug found via a GitHub Actions CI failure: the unshare
+    detection check originally listed its own flags separately from
+    the real invocation, and they drifted apart (detection only tested
+    `--net`, the real invocation also used `--pid --mount --fork`). On
+    GitHub's hosted runners specifically, the simpler check passed but
+    the full combination silently failed at real execution time -
+    every sandboxed run was falsely reported as isolated when it
+    wasn't, and every single sandbox test failed with exit code 1.
+
+    Fixed by having both places share one UNSHARE_FLAGS constant,
+    making this specific class of drift structurally impossible rather
+    than something to remember to keep in sync. This test just
+    confirms the constant exists and has the expected shape, as a
+    guard against someone reintroducing separate literal flag lists in
+    the future."""
+    assert UNSHARE_FLAGS == ["--net", "--pid", "--mount", "--fork"]
 
 
 def test_never_raises_on_a_nonexistent_script():
