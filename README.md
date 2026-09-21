@@ -160,16 +160,33 @@ husk skill path/to/SKILL.md --llm-review
 ```
 
 **To be clear about where credit belongs**: when this catches something
-static analysis can't, that result reflects Anthropic's Claude model's
-own reasoning ability, not engineering work done in this project. Husk's
-job here is limited to building the prompt and calling the API - the
-judgment itself is Claude's, and it should be credited as such rather
-than folded into this project's own detection claims.
+static analysis can't, that result reflects the model's own reasoning
+ability, not engineering work done in this project. Husk's job here is
+limited to building the prompt and calling the API - the judgment
+itself is the model's, and it should be credited as such rather than
+folded into this project's own detection claims.
+
+Anthropic's Claude is the default and the only provider this project's
+own numbers are tested against. If you already have a key with a
+different provider, `--llm-provider` lets you use it instead:
+
+```bash
+export GEMINI_API_KEY=your-key-here
+husk skill path/to/SKILL.md --llm-review --llm-provider gemini
+```
+
+Supported: `anthropic` (default), `gemini`, `deepseek`, `grok`, `kimi` -
+each reads its own environment variable (`ANTHROPIC_API_KEY`,
+`GEMINI_API_KEY`, `DEEPSEEK_API_KEY`, `XAI_API_KEY`, `MOONSHOT_API_KEY`).
+This flag exists for convenience, not as a claim that every provider
+performs equally here - none of the others have been evaluated against
+real data the way Claude has for this project.
 
 **The honest tradeoff, stated up front**: this is not free, not local,
 and not private. It costs tokens and sends the skill's content to
-Anthropic's API. It never runs unless you explicitly pass `--llm-review`,
-and if no API key is set, it skips cleanly - the free static result is
+whichever provider's API you point it at. It never runs unless you
+explicitly pass `--llm-review`, and if no API key is set for the
+provider you chose, it skips cleanly - the free static result is
 never affected either way.
 
 ### Why this uses your own API key, not a hosted service
