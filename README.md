@@ -1,7 +1,5 @@
 # Husk
 
-[![Tests](https://github.com/ctrl-adam/Husk/actions/workflows/tests.yml/badge.svg)](https://github.com/ctrl-adam/Husk/actions/workflows/tests.yml)
-
 A static security scanner for AI agent skill packages - built to specifically defend against bypass techniques that were shown, in published 2026 security research, to defeat production scanners from Snyk, Cisco, and Vercel's skills.sh.
 
 ## Benchmark - how it compares

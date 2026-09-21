@@ -43,7 +43,8 @@ mypy src/husk/ --ignore-missing-imports   # type check - must pass clean
 pytest tests/ --cov=src/husk --cov-report=term-missing   # full suite + coverage
 ```
 
-All three run in CI (`.github/workflows/tests.yml`) and must pass.
+Run all three yourself before opening a PR - they're not automated,
+so it's on you to check them.
 
 ## Code style
 

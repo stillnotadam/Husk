@@ -8,7 +8,7 @@ status; everything below is the full record.
 
 | Tier | Goal | Status |
 |---|---|---|
-| Tier 1 | Real-dataset validation, false-positive testing, CI, packaging, beat Snyk in a real benchmark | ✅ Complete |
+| Tier 1 | Real-dataset validation, false-positive testing, packaging, beat Snyk in a real benchmark | ✅ Complete |
 | Tier 2 | LLM backup layer, diverse regression suite, full taxonomy audit, multi-platform support, dynamic sandbox | ✅ Complete |
 | Tier 3 | Bulk real-sample sourcing, real competitor benchmarks (7 tested), learn from competitor source, platform diversity, real kernel-isolated sandbox | ✅ Complete |
 | Tier 4 | AST taint tracking (incl. parameter-flow), real filesystem isolation, mined for more real attacks, LLM layer validated at scale | ✅ Complete |
