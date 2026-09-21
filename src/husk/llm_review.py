@@ -136,11 +136,14 @@ def review_skill_with_llm(content, api_key=None, model="claude-sonnet-5"):
             "model": model,
             # Raised from 600 after live testing (Tier 4.4) found
             # occasional truncation on longer/complex files even at
-            # that level. temperature=0 for more consistent structured
-            # (JSON) output - less relevant for creative tasks, directly
-            # useful here where we need the exact same schema every time.
+            # that level. Deliberately NOT setting temperature - a real
+            # bug found via live testing: the API rejects the
+            # temperature parameter outright for this model
+            # ("temperature is deprecated for this model"), which broke
+            # every single review call. The regex-based JSON extraction
+            # fallback below is what actually handles response-format
+            # inconsistency now, not a temperature setting.
             "max_tokens": 1000,
-            "temperature": 0,
             "messages": [{"role": "user", "content": prompt}],
         }).encode("utf-8")
 
