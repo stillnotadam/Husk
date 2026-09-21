@@ -202,10 +202,32 @@ def _unshare_isolation_works():
             unshare_path = shutil.which("unshare") or "unshare"
             proc = subprocess.run(  # noqa: S603 - fixed args, resolved binary path, not untrusted input
                 [unshare_path] + UNSHARE_FLAGS + ["--", "python3", "-c",
-                 "import socket; socket.create_connection(('8.8.8.8', 53), timeout=2)"],
-                capture_output=True, timeout=5, check=False,
+                 "print('PROBE_STARTED', flush=True); import socket; "
+                 "socket.create_connection(('8.8.8.8', 53), timeout=2)"],
+                capture_output=True, timeout=5, check=False, text=True,
             )
-            _unshare_isolation_works._cached = proc.returncode != 0
+            # A non-zero exit code alone is ambiguous - it's what you'd
+            # see BOTH when the child genuinely ran and its network
+            # call correctly failed (real isolation working) AND when
+            # unshare itself failed to create the namespaces at all
+            # and the child never ran (total failure, not isolation).
+            # Real bug found via a second GitHub Actions CI failure,
+            # after the flag-matching fix above still wasn't enough:
+            # on GitHub's hosted runners, unshare with the full flag
+            # combination fails to even start the child process, but
+            # that failure ALSO produces a non-zero exit code - so the
+            # old check (`returncode != 0`) misread total failure as
+            # confirmed isolation, then every real sandboxed script
+            # failed the exact same way the "probe" secretly did.
+            # Fixed by having the child print a marker before
+            # attempting the network call: real isolation means the
+            # marker IS present (the child ran) and the exit code is
+            # still non-zero (the connection itself failed); a broken
+            # unshare means the marker is ABSENT (the child never got
+            # to run at all), regardless of exit code.
+            _unshare_isolation_works._cached = (
+                proc.returncode != 0 and "PROBE_STARTED" in proc.stdout
+            )
         except Exception:
             _unshare_isolation_works._cached = False
     return _unshare_isolation_works._cached
