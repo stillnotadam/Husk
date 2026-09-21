@@ -32,15 +32,19 @@ def cmd_skill(args):
     exit_code = _print_result(result["verdict"], result["findings"], "skill")
 
     if args.llm_review:
-        print("--- Backup: LLM semantic review (Anthropic Claude, not Husk's own logic) ---")
+        provider_label = {
+            "anthropic": "Claude", "gemini": "Gemini", "deepseek": "DeepSeek",
+            "grok": "Grok", "kimi": "Kimi",
+        }.get(args.llm_provider, args.llm_provider)
+        print(f"--- Backup: LLM semantic review ({provider_label}, not Husk's own logic) ---")
         with open(args.path, encoding="utf-8", errors="replace") as f:
             content = f.read()
-        review = review_skill_with_llm(content)
+        review = review_skill_with_llm(content, provider=args.llm_provider)
         if not review["available"]:
             print(f"  [skipped] {review['error']}\n")
         else:
-            print(f"  Claude's verdict: {review['verdict']} (confidence: {review['confidence']})")
-            print(f"  Claude's reasoning: {review['reasoning']}\n")
+            print(f"  {provider_label}'s verdict: {review['verdict']} (confidence: {review['confidence']})")
+            print(f"  {provider_label}'s reasoning: {review['reasoning']}\n")
             if review["verdict"] == "SUSPICIOUS":
                 exit_code = 1
     elif result["verdict"] == "SAFE":
@@ -96,10 +100,19 @@ def main():
     p_skill.add_argument("path", help="Path to the skill file")
     p_skill.add_argument(
         "--llm-review", action="store_true",
-        help="Opt-in second opinion from an LLM (requires ANTHROPIC_API_KEY). "
-             "Sends the file content to a third-party API and costs tokens - "
-             "never runs unless you pass this flag. See README.md for why "
-             "this exists and what it costs.",
+        help="Opt-in second opinion from an LLM (requires an API key for "
+             "whichever provider you pick with --llm-provider). Sends the "
+             "file content to a third-party API and costs tokens - never "
+             "runs unless you pass this flag. See README.md for why this "
+             "exists and what it costs.",
+    )
+    p_skill.add_argument(
+        "--llm-provider", default="anthropic",
+        choices=["anthropic", "gemini", "deepseek", "grok", "kimi"],
+        help="Which provider to use with --llm-review (default: anthropic, "
+             "the primary, most-tested path this project is built around). "
+             "Each needs its own env var: ANTHROPIC_API_KEY, GEMINI_API_KEY, "
+             "DEEPSEEK_API_KEY, XAI_API_KEY, or MOONSHOT_API_KEY.",
     )
     p_skill.set_defaults(func=cmd_skill)
 

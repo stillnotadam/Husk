@@ -102,22 +102,90 @@ Here is the skill file content:
 ---
 """
 
+# Provider registry. "anthropic" is handled separately below since it
+# uses Claude's own native Messages API (the one this whole project is
+# built around and credits by name). The other four all expose an
+# OpenAI-compatible chat completions endpoint, confirmed via their own
+# docs, so one shared code path handles all of them. Each provider
+# looks for its own environment variable when no key is passed in
+# explicitly, same pattern as ANTHROPIC_API_KEY below.
+PROVIDER_CONFIG = {
+    "gemini": {
+        "base_url": "https://generativelanguage.googleapis.com/v1beta/openai/chat/completions",
+        "model": "gemini-flash-latest",
+        "env_var": "GEMINI_API_KEY",
+    },
+    "deepseek": {
+        "base_url": "https://api.deepseek.com/chat/completions",
+        "model": "deepseek-chat",
+        "env_var": "DEEPSEEK_API_KEY",
+    },
+    "grok": {
+        "base_url": "https://api.x.ai/v1/chat/completions",
+        "model": "grok-4.6",
+        "env_var": "XAI_API_KEY",
+    },
+    "kimi": {
+        "base_url": "https://api.moonshot.ai/v1/chat/completions",
+        "model": "kimi-k2.6",
+        "env_var": "MOONSHOT_API_KEY",
+    },
+}
 
-def review_skill_with_llm(content, api_key=None, model="claude-sonnet-5"):
-    # NOTE: earlier live validation this session used "claude-sonnet-4-6"
-    # and it worked (confirmed by the API's own response). Updated to
-    # "claude-sonnet-5" as the current, most up-to-date Sonnet-tier model
-    # available - a genuine "use the best model we can" improvement, not
-    # a bug fix for something broken.
+
+def _extract_verdict_json(text):
+    """Shared JSON-recovery logic for every provider: models occasionally
+    wrap JSON in a code fence or add stray prose around it despite
+    instructions. Recovers both cases; does not recover a response
+    truncated mid-object (no closing brace anywhere) - that still
+    surfaces as a clear, honest error rather than a wrong guess."""
+    text = text.strip()
+    if text.startswith("```"):
+        text = text.strip("`").lstrip("json").strip()
+    try:
+        return json.loads(text)
+    except json.JSONDecodeError:
+        start = text.find("{")
+        end = text.rfind("}")
+        if start == -1 or end == -1 or end <= start:
+            raise
+        return json.loads(text[start:end + 1])
+
+
+def review_skill_with_llm(content, api_key=None, model=None, provider="anthropic"):
     """
     Sends skill content to an LLM for semantic review. Returns a dict:
     {"available": bool, "verdict": str|None, "confidence": str|None,
      "reasoning": str|None, "error": str|None}
 
+    provider defaults to "anthropic" (Claude), matching this project's
+    original design - the flag exists for people who already have a
+    key with a different provider and want to use it, not as a
+    suggestion that all providers are equally validated here. The
+    numbers in README.md and BENCHMARK.md all come from static
+    analysis alone, and where this layer succeeds, credit belongs to
+    whichever model actually made the call, not to this project's own
+    engineering (see README.md's own section on this).
+
     Never raises on missing key or API failure - this is a best-effort
     second opinion, not a required step, and the caller should always be
     able to fall back to the static-only result.
     """
+    if provider == "anthropic":
+        return _review_with_anthropic(content, api_key, model or "claude-sonnet-5")
+    if provider in PROVIDER_CONFIG:
+        return _review_with_openai_compatible(content, api_key, model, provider)
+    return {
+        "available": False,
+        "verdict": None,
+        "confidence": None,
+        "reasoning": None,
+        "error": f"Unknown provider '{provider}'. Choose from: anthropic, "
+                 f"{', '.join(PROVIDER_CONFIG.keys())}.",
+    }
+
+
+def _review_with_anthropic(content, api_key, model):
     api_key = api_key or os.environ.get("ANTHROPIC_API_KEY")
     if not api_key:
         return {
@@ -170,30 +238,7 @@ def review_skill_with_llm(content, api_key=None, model="claude-sonnet-5"):
                 f"(stop_reason={data.get('stop_reason')!r})"
             )
 
-        # Models occasionally wrap JSON in a code fence despite instructions;
-        # strip that defensively rather than failing the whole review.
-        if text.startswith("```"):
-            text = text.strip("`").lstrip("json").strip()
-
-        try:
-            parsed = json.loads(text)
-        except json.JSONDecodeError:
-            # Real failures found via live testing (Tier 4.4): occasional
-            # truncation even at a generous max_tokens, or stray text
-            # around the JSON object despite instructions. Fall back to
-            # extracting the substring between the first '{' and the
-            # last '}' before giving up entirely - this recovers cleanly
-            # from both "extra prose around valid JSON" and, since we
-            # search for the LAST '}', from a response that has trailing
-            # junk after an otherwise-complete object. It does NOT
-            # recover a response truncated mid-object (no closing '}'
-            # exists anywhere) - that case still surfaces as a clear,
-            # honest error rather than a wrong guess.
-            start = text.find("{")
-            end = text.rfind("}")
-            if start == -1 or end == -1 or end <= start:
-                raise
-            parsed = json.loads(text[start:end + 1])
+        parsed = _extract_verdict_json(text)
 
         return {
             "available": True,
@@ -206,6 +251,70 @@ def review_skill_with_llm(content, api_key=None, model="claude-sonnet-5"):
     except Exception as e:
         # Any failure here (network, auth, parsing) degrades gracefully -
         # the static result stands on its own regardless.
+        return {
+            "available": False,
+            "verdict": None,
+            "confidence": None,
+            "reasoning": None,
+            "error": f"LLM review failed ({type(e).__name__}: {e}). "
+                     f"Static scan result above is unaffected.",
+        }
+
+
+def _review_with_openai_compatible(content, api_key, model, provider):
+    """Shared path for every provider that speaks the OpenAI chat
+    completions format (Gemini, DeepSeek, Grok, Kimi - each confirmed
+    via their own docs, not assumed). Anthropic is deliberately NOT
+    routed through here even though it could be adapted - it keeps its
+    own native-format function above, since that's the primary,
+    measured path this whole project is built around."""
+    config = PROVIDER_CONFIG[provider]
+    api_key = api_key or os.environ.get(config["env_var"])
+    if not api_key:
+        return {
+            "available": False,
+            "verdict": None,
+            "confidence": None,
+            "reasoning": None,
+            "error": f"{config['env_var']} not set - LLM review skipped. "
+                     "This is expected if you haven't opted in; the static "
+                     "scan result above is unaffected.",
+        }
+
+    try:
+        prompt = REVIEW_PROMPT_TEMPLATE.format(content=content[:15000])
+        body = json.dumps({
+            "model": model or config["model"],
+            "max_tokens": 1000,
+            "messages": [{"role": "user", "content": prompt}],
+        }).encode("utf-8")
+
+        req = urllib.request.Request(  # noqa: S310 - fixed https:// URL from PROVIDER_CONFIG, not user-controlled
+            config["base_url"],
+            data=body,
+            headers={
+                "Content-Type": "application/json",
+                "Authorization": f"Bearer {api_key}",
+            },
+        )
+        with urllib.request.urlopen(req, timeout=30) as resp:  # noqa: S310 - fixed URL, not user input
+            data = json.loads(resp.read().decode("utf-8"))
+
+        text = data["choices"][0]["message"]["content"].strip()
+        if not text:
+            raise ValueError("API response contained no text content.")
+
+        parsed = _extract_verdict_json(text)
+
+        return {
+            "available": True,
+            "verdict": parsed.get("verdict"),
+            "confidence": parsed.get("confidence"),
+            "reasoning": parsed.get("reasoning"),
+            "error": None,
+        }
+
+    except Exception as e:
         return {
             "available": False,
             "verdict": None,

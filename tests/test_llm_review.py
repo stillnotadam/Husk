@@ -111,3 +111,67 @@ def test_empty_response_text_fails_with_a_clear_error():
 
     assert result["available"] is False
     assert "no text content" in result["error"]
+
+
+def _fake_openai_compatible_response(text):
+    """Response shape for Gemini/DeepSeek/Grok/Kimi - all four confirmed
+    to use the standard OpenAI chat completions format, distinct from
+    Anthropic's own content-blocks format above."""
+    fake_body = json.dumps({
+        "choices": [{"message": {"content": text}}]
+    }).encode("utf-8")
+
+    class FakeResponse:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *a):
+            return False
+
+        def read(self):
+            return fake_body
+
+    return FakeResponse()
+
+
+def test_openai_compatible_provider_parses_a_real_shaped_response():
+    """Covers the shared code path used by gemini/deepseek/grok/kimi -
+    verified via each provider's own docs to use this exact response
+    shape, distinct from Anthropic's native format tested above."""
+    text = json.dumps({
+        "verdict": "SUSPICIOUS", "confidence": "high", "reasoning": "Test reasoning.",
+    })
+    with patch("urllib.request.urlopen", return_value=_fake_openai_compatible_response(text)):
+        result = review_skill_with_llm("content", api_key="fake-key", provider="deepseek")
+
+    assert result["available"] is True
+    assert result["verdict"] == "SUSPICIOUS"
+    assert result["confidence"] == "high"
+
+
+def test_each_openai_compatible_provider_uses_its_own_env_var():
+    """gemini/deepseek/grok/kimi each look for their own environment
+    variable when no key is passed explicitly, same pattern as
+    ANTHROPIC_API_KEY - never falls back to a different provider's key."""
+    expected_env_vars = {
+        "gemini": "GEMINI_API_KEY", "deepseek": "DEEPSEEK_API_KEY",
+        "grok": "XAI_API_KEY", "kimi": "MOONSHOT_API_KEY",
+    }
+    for provider, env_var in expected_env_vars.items():
+        result = review_skill_with_llm("content", api_key=None, provider=provider)
+        assert result["available"] is False
+        assert env_var in result["error"]
+
+
+def test_unknown_provider_fails_with_a_clear_error_not_a_crash():
+    result = review_skill_with_llm("content", api_key="fake-key", provider="not-a-real-provider")
+    assert result["available"] is False
+    assert "Unknown provider" in result["error"]
+
+
+def test_openai_compatible_provider_degrades_gracefully_on_api_failure():
+    with patch("urllib.request.urlopen", side_effect=Exception("simulated failure")):
+        result = review_skill_with_llm("content", api_key="fake-key", provider="grok")
+
+    assert result["available"] is False
+    assert "Static scan result above is unaffected" in result["error"]
