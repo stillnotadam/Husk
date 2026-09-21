@@ -1,8 +1,10 @@
 # Publishing husk-scanner to PyPI
 
-Everything up through building and validating the package is done.
-The one remaining step needs your own PyPI account - not something I
-have or should have credentials for.
+**Live**: `husk-scanner` is published. `pip install husk-scanner` works.
+
+The rest of this file is the process for the *next* release (a version
+bump) - kept as a reference so the steps don't need to be rediscovered
+each time.
 
 ## What's already done and verified
 
@@ -23,18 +25,15 @@ have or should have credentials for.
 - `dist/` and `build/` added to `.gitignore` - always rebuild fresh
   at release time, don't commit stale artifacts
 
-## One thing to fix first: your real GitHub username
+## Note: the already-published 0.1.0 still has the placeholder URLs
 
-Three files still have the placeholder `YOUR-USERNAME` in URLs
-(`pyproject.toml`, `README.md`, `src/husk/cli.py`'s help text) - I
-don't know your real GitHub username, so I left it as a placeholder
-rather than guess. Give me the real one and I'll do a clean find-and-
-replace across all of them before you publish, or you can do it
-yourself with:
-
-```bash
-grep -rl "YOUR-USERNAME" --include="*.py" --include="*.toml" --include="*.md" . | xargs sed -i 's/YOUR-USERNAME/your-real-username/g'
-```
+The GitHub username placeholder (`YOUR-USERNAME`) in `pyproject.toml`
+and `cli.py`'s help text has since been fixed in the source, but PyPI
+doesn't allow overwriting an already-published version's files. The
+live 0.1.0 package still points to the broken URL. Worth bumping to
+0.1.1 and republishing next time you're making any other change, so
+new installs get the corrected links - not urgent enough to publish
+a version bump for on its own.
 
 ## The actual publish (needs your PyPI account)
 

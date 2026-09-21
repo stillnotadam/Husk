@@ -87,7 +87,7 @@ def main():
     parser = argparse.ArgumentParser(
         prog="husk",
         description="Static security scanner for AI agent skill packages. "
-                     "See https://github.com/YOUR-USERNAME/husk for the full "
+                     "See https://github.com/ctrl-adam/Husk for the full "
                      "story, including honest limitations.",
     )
     subparsers = parser.add_subparsers(dest="command", required=True)

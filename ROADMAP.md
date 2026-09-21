@@ -19,8 +19,9 @@ status; everything below is the full record.
 analysis, 68 automated tests (up from the original handful), 76% code coverage, `ruff`/`mypy` both clean, real
 kernel-level sandbox isolation (network + process + filesystem,
 verified against real attacks), an AST-based taint tracker, an
-optional LLM-review layer validated at 93%+ recall live, and seven
-honest head-to-head competitor benchmarks. See BENCHMARK.md's own
+optional LLM-review layer validated at 93%+ recall live, and eight
+honest head-to-head competitor benchmarks. Published to PyPI as
+`husk-scanner` (`pip install husk-scanner`). See BENCHMARK.md's own
 summary for the exact current recall/precision numbers.
 
 ## What's genuinely still open
@@ -29,8 +30,6 @@ summary for the exact current recall/precision numbers.
   endpoint); an outreach email is drafted and ready
   (`snyk_outreach_draft.md`) but needs the user to actually send it -
   this is the one item that isn't engineering work.
-- Two more named competitors found but not yet tested (SkillFortify's
-  sibling tools, `skillfrisk`).
 - A handful of smaller, explicitly-tracked items - see the dated
   entries below for the honest, complete history of what's been tried,
   what broke, and how it got fixed.

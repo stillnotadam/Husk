@@ -1,6 +1,6 @@
 # Husk
 
-[![Tests](https://github.com/YOUR-USERNAME/husk/actions/workflows/tests.yml/badge.svg)](https://github.com/YOUR-USERNAME/husk/actions/workflows/tests.yml)
+[![Tests](https://github.com/ctrl-adam/Husk/actions/workflows/tests.yml/badge.svg)](https://github.com/ctrl-adam/Husk/actions/workflows/tests.yml)
 
 A static security scanner for AI agent skill packages - built to specifically defend against bypass techniques that were shown, in published 2026 security research, to defeat production scanners from Snyk, Cisco, and Vercel's skills.sh.
 
@@ -39,16 +39,20 @@ Husk is a response to that specific finding - not a general-purpose scanner, but
 
 ## What it defends against
 
-| Technique | What it does | Status |
-|---|---|---|
-| Whitespace inflation | Pads a file with blank content to push malicious code past a scanner's context limit | Detected |
-| Bytecode / base64 hiding | Encodes the payload so plain-text pattern matching can't read it | Detected, decoded, and recursively re-scanned |
-| Archive indirection | Hides the payload inside a nested archive disguised with an innocent file extension | Detected via real file signatures, not filenames - recurses through nested archives |
-| Prompt-injection against the scanner itself | Talks an LLM-based judge into approving a malicious skill | Not applicable by design - Husk never uses an LLM to make a safety decision; all detection is deterministic pattern analysis |
-| Hidden instructions (prompt injection *targeting the agent*) | Directive language hidden in markdown/HTML comments, invisible on render, instructing the AI agent to act against the user's interest | Detected - verified against a real published example from academic research on 98,380 real-world skills |
-| Credential harvesting | Scans for `.env`, `.pem`, `credentials.json`, SSH keys, etc. and exfiltrates them, often disguised as a backup/CI step | Detected - requires both file-access-to-a-credential-pattern AND network-send capability present, specifically to avoid flagging normal setup docs that just mention `.env` |
-| Fake-prerequisite social engineering | Plain-English instructions telling a human to manually download and run a "required utility" - the actual dominant real-world pattern (86.3% of wild malicious skills per published research) | Detected - added after real-dataset testing revealed modules 1-6 caught 0/8 real malicious samples; now 8/8 |
-| Exfiltration chains | The specific documented sequence: read a file, base64-encode it, send it over the network | Detected as a three-step chain, not a single pattern |
+Husk has grown well past the original bypass techniques it was built to answer. 35 detection functions now, spanning:
+
+| Category | Examples |
+|---|---|
+| Obfuscation & evasion | Whitespace inflation, base64/bytecode hiding, split-payload evasion, Unicode steganography, disguised archives |
+| Data exfiltration | Credential/wallet/browser-password theft, exfiltration chains, DNS covert channels, markdown image beacons, shell command-substitution theft |
+| Code & command execution | Dangerous eval/exec, `shell=True`, dropper patterns, reverse shells, language-specific shell execution (Python, PowerShell, Rust, Go, Ruby) |
+| Prompt injection | Hidden instructions in comments, overt instruction-override language, safety-bypass instructions |
+| Social engineering | Fake-prerequisite "required utility" downloads (the dominant real-world attack pattern) |
+| Persistence & privilege escalation | Cron/systemd persistence, SUID/SGID bits, Docker socket access, privileged containers, agent self-modification |
+| Supply chain | npm postinstall/preinstall hooks, declared-vs-actual capability mismatch |
+| Other | Ransomware behavior, SQL injection, sensitive-data logging, macOS JXA execution |
+
+Every module above is traceable to either published research or a specific real malicious sample found during this project's own testing against 11,470 real confirmed-malicious skills across two independent academic datasets. Full list with the reasoning behind each: [`src/husk/skill_scanner.py`](src/husk/skill_scanner.py).
 
 ## Validated against real-world research, not just self-built test cases
 
@@ -63,16 +67,16 @@ This is a first version. It has been adversarially self-tested - evasion variant
 ## Install
 
 ```bash
-pip install git+https://github.com/YOUR-USERNAME/husk.git
+pip install husk-scanner
 ```
 
-Or, for development (editable install, includes the test suite):
+For development (editable install, includes the test suite and dev tools):
 
 ```bash
-git clone https://github.com/YOUR-USERNAME/husk.git
-cd husk
+git clone https://github.com/ctrl-adam/Husk.git
+cd Husk
 pip install -e ".[dev]"
-python3 -m pytest tests/test_scanner.py -v   # 13 passed, 2 xfailed (see below)
+python3 -m pytest tests/ -v   # 68 passed, 10 xfailed
 ```
 
 ## Usage
@@ -189,12 +193,12 @@ exactly that.
 
 ## What v1 does NOT do yet
 
-- No packaged CLI install (`pip install` support) yet
-- No large-scale false-positive testing against a broad set of legitimate skills yet (currently 11 hand-built test cases, 3 clean / 8 flagged, zero false positives so far - but this is a small sample)
-- Archive extraction currently supports ZIP; GZIP/7z/RAR extraction is detected but not yet unpacked
-- Credential-harvesting detection only covers a fixed list of filename patterns (.env, .pem, credentials.json, etc.) - a renamed or unlisted credential file type would be missed
-- Exfiltration-chain detection currently checks for presence of all three steps anywhere in the file, not strict call-order - a coincidental combination could theoretically false-positive, though none has been observed yet
-- **Does not reliably catch novel, semantically-disguised attacks with no code and no recognizable keywords** - tested directly against an independent academic dataset (AgentTrap) with genuinely different attack styles than the campaign used for the "8/8" validation elsewhere in this README, and missed both samples tried (a subtle instruction-blurring attack, and a fake "compliance auditor" that asks in plain prose for secrets to be sent to an external endpoint). This matches independent published research (see BENCHMARK.md) showing static pattern-matching tops out around 13-32% recall on novel/disguised attacks generally - not a Husk-specific flaw, but a real, honest limit of this entire approach. Husk is a fast, free, local first-pass filter, not a complete security boundary.
+- **Real-world recall is 61.5-64.4%, not 100%** (measured against 11,470 real confirmed-malicious samples across two independent datasets - see BENCHMARK.md for the full methodology). The main gap: **novel, semantically-disguised attacks with no code and no recognizable keywords** - a subtle instruction-blurring attack and a fake "compliance auditor" asking in plain prose for secrets, both missed by static analysis and saved openly in `tests/known_misses/` rather than hidden. This matches published research showing static pattern-matching tops out around 13-32% recall on novel/disguised attacks generally - not a Husk-specific flaw, but a real, honest limit of this entire approach. The optional `--llm-review` layer exists specifically for this gap.
+- **Two structural limits no pre-execution scanner, static or LLM, can ever close**: Self-Mutating Poisoning (the malicious content doesn't exist in the file until the skill actually runs) and dynamically-generated payloads. Confirmed directly against real samples exhibiting both patterns.
+- Archive extraction currently unpacks ZIP; GZIP/7z/RAR are detected (a mismatched-extension archive still gets flagged) but not yet recursively unpacked
+- The AST taint tracker follows data flow within a file, including into a function through its parameters, but doesn't re-trace taint propagating deeper inside a callee's own body, and doesn't cross module/file boundaries
+- The dynamic sandbox compiles and runs Python, JavaScript, shell, and Ruby directly; Rust and Go are compiled first, but only single-file source with no external crate/module dependencies compiles this way - a real v1 limitation, reported as a plain compilation note rather than silently skipped
+- Credential-harvesting detection covers a fixed list of filename patterns (`.env`, `.pem`, `credentials.json`, etc.) - a renamed or unlisted credential file type would be missed
 
 ## Research this project is grounded in
 
