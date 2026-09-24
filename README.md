@@ -283,12 +283,14 @@ your skill content at any point. There's no server in the middle to
 breach, no proprietary code of yours passing through infrastructure
 someone else runs.
 
-This is also, honestly, a deliberate non-business decision. Husk isn't
-trying to become a company - it's meant to be the most useful, most
-transparent, most honestly-documented free tool it can be in this space.
-If that changes something might get built on top of this later, but the
-free, local-first, BYOK core described in this README is meant to stay
-exactly that.
+This part of Husk is a deliberate choice, not a limitation: your API key 
+goes straight from your machine to Anthropic's API, Husk never sees it, your usage, 
+your bill, or your skill content. There's no server in the middle to breach, 
+no proprietary infrastructure your data has to pass through.
+
+That commitment isn't going anywhere. Whatever else gets built 
+around Husk as this grows, the free, local-first, BYOK core described 
+in this README stays exactly that.
 
 ## What v1 does NOT do yet
 
