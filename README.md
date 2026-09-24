@@ -24,7 +24,7 @@ corner:
 | Best competitor at matched precision | ~57% | 81–94% |
 | Best competitor raw recall (loose mode, high false positives) | 92.5% | 22–59% |
 
-Snyk's own Agent Scan is excluded from the numeric comparison - its
+Snyk's own Agent Scan is excluded from the numeric comparison. its
 real analysis endpoint returns 403 even with a valid account token
 (documented in BENCHMARK.md), so no real detection number was
 obtainable, not because it performed worse.
