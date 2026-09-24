@@ -2,6 +2,8 @@
 
 A static security scanner for AI agent skill packages - built to specifically defend against bypass techniques that were shown, in published 2026 security research, to defeat production scanners from Snyk, Cisco, and Vercel's skills.sh.
 
+[CHANGELOG](CHANGELOG.md) - what's new in each release, actively maintained.
+
 ## Benchmark - how it compares
 
 Real numbers, real datasets, no cherry-picking: full results and
@@ -18,7 +20,7 @@ corner:
 
 | | Recall (real malicious) | Precision (real legitimate) |
 |---|---|---|
-| **Husk** | **61.5–64.4% (full datasets, 11,470 real samples)** | **98.0%** |
+| **Husk** | **61.3–63.9% (full datasets, 11,225 real samples)** | **98.8%** |
 | Best competitor at matched precision | ~57% | 81–94% |
 | Best competitor raw recall (loose mode, high false positives) | 92.5% | 22–59% |
 
@@ -37,20 +39,20 @@ Husk is a response to that specific finding - not a general-purpose scanner, but
 
 ## What it defends against
 
-Husk has grown well past the original bypass techniques it was built to answer. 35 detection functions now, spanning:
+Husk has grown well past the original bypass techniques it was built to answer. 43 detection functions now, spanning:
 
 | Category | Examples |
 |---|---|
-| Obfuscation & evasion | Whitespace inflation, base64/bytecode hiding, split-payload evasion, Unicode steganography, disguised archives |
-| Data exfiltration | Credential/wallet/browser-password theft, exfiltration chains, DNS covert channels, markdown image beacons, shell command-substitution theft |
-| Code & command execution | Dangerous eval/exec, `shell=True`, dropper patterns, reverse shells, language-specific shell execution (Python, PowerShell, Rust, Go, Ruby) |
-| Prompt injection | Hidden instructions in comments, overt instruction-override language, safety-bypass instructions |
+| Obfuscation & evasion | Whitespace inflation, base64/bytecode hiding, split-payload evasion, Unicode steganography, disguised archives, self-extracting payloads staged in `.git/` (the SkillCloak technique, arXiv:2607.02357) |
+| Data exfiltration | Credential/wallet/browser-password theft, exfiltration chains, DNS covert channels, markdown image beacons, shell command-substitution theft, hardcoded secret literals (Stripe/AWS/GitHub/Slack/Google key formats), tunnel-service exfiltration endpoints (ngrok/serveo/etc) |
+| Code & command execution | Dangerous eval/exec, `shell=True`, dropper patterns, reverse shells, language-specific shell execution (Python, PowerShell, Rust, Go, Ruby), dynamic code compilation (`compile()` in eval/exec mode) |
+| Prompt injection | Hidden instructions in comments, overt instruction-override language, safety-bypass instructions, bare imperative action-concealment language |
 | Social engineering | Fake-prerequisite "required utility" downloads (the dominant real-world attack pattern) |
 | Persistence & privilege escalation | Cron/systemd persistence, SUID/SGID bits, Docker socket access, privileged containers, agent self-modification |
-| Supply chain | npm postinstall/preinstall hooks, declared-vs-actual capability mismatch |
-| Other | Ransomware behavior, SQL injection, sensitive-data logging, macOS JXA execution |
+| Supply chain | npm postinstall/preinstall hooks, declared-vs-actual capability mismatch, untrusted remote package installs (raw archive URLs instead of registry names) |
+| Other | Ransomware behavior, SQL injection (including via query-building helper functions), sensitive-data logging, macOS JXA execution, unconstrained path reads, CPU-bound resource exhaustion |
 
-Every module above is traceable to either published research or a specific real malicious sample found during this project's own testing against 11,470 real confirmed-malicious skills across two independent academic datasets. Full list with the reasoning behind each: [`src/husk/skill_scanner.py`](src/husk/skill_scanner.py).
+Every module above is traceable to either published research or a specific real malicious sample found during this project's own testing against 11,225 real confirmed-malicious skills across two independent academic datasets, or against a third, independently-labeled corpus (`cisco-ai-defense/skill-scanner`'s own `evals/`, 13/16 malicious fixtures caught with 0 false positives - see BENCHMARK.md). Full list with the reasoning behind each: [`src/husk/skill_scanner.py`](src/husk/skill_scanner.py).
 
 ## Validated against real-world research, not just self-built test cases
 
@@ -74,7 +76,7 @@ For development (editable install, includes the test suite and dev tools):
 git clone https://github.com/ctrl-adam/Husk.git
 cd Husk
 pip install -e ".[dev]"
-python3 -m pytest tests/ -v   # 68 passed, 10 xfailed
+python3 -m pytest tests/ -v   # 73 passed, 10 xfailed
 ```
 
 ## Usage
@@ -138,6 +140,88 @@ unsupported or missing one is skipped cleanly, not silently ignored or
 crashed on). A clean run means
 nothing bad happened *this time*, under *these* inputs - not a
 guarantee the script is safe.
+
+## CI integration: SARIF output and suppressions
+
+```bash
+husk package path/to/skill_package/ --output report.sarif
+```
+
+Writes a standard SARIF 2.1.0 report. GitHub Code Scanning (and most
+CI security tooling generally) consumes this format directly, so
+findings show up in a PR's own Files Changed view and the repo's
+Security tab, not just a terminal log.
+
+At Husk's real, honestly-measured false-positive rate (see
+BENCHMARK.md, this isn't hidden), running the same scan repeatedly in
+CI without a way to say "reviewed, this one's fine" gets a tool
+uninstalled fast. Drop a `.huskignore` file in the scanned package
+directory, same convention as `.gitignore`, one rule ID per line:
+
+```
+# .huskignore
+A_LITERAL_VALUE_MATCHING_THE_0EBF77
+```
+
+Run a scan once, the terminal output already shows each finding, add
+the ones you've reviewed and accepted, future scans won't re-flag
+them. Honest limitation, stated plainly: rule IDs are derived from
+each finding's own stable description text, not built as explicit
+per-check identifiers, so a suppression could in principle need
+updating if that description text changes in a later version.
+
+### GitHub Action
+
+A ready-to-use composite action wraps the SARIF flow above end to
+end: installs Husk, scans, uploads results to your repo's Security
+tab, no custom scripting needed. Drop this in
+`.github/workflows/husk-scan.yml`:
+
+```yaml
+name: Husk Skill Scan
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+  security-events: write
+  actions: read  # only required for private repositories
+
+jobs:
+  husk-scan:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ctrl-adam/Husk/action@main
+        with:
+          path: "."
+```
+
+Full example with every option, including the optional VirusTotal
+check, in [`action/examples/husk-scan.yml`](action/examples/husk-scan.yml).
+
+## Optional: VirusTotal signature check, for the one gap static analysis structurally can't close
+
+Static analysis reads a skill's own text and code - it has no way to
+recognize a known-malware *binary* bundled in the package by
+signature (found via testing: a package containing the EICAR standard
+antivirus test file, correctly unreachable by any code-pattern check
+since there's no dangerous language pattern in a signature-based test
+file at all). This isn't a Husk-specific gap; no static-analysis tool
+can do this, it's a fundamentally different kind of check.
+
+```bash
+export VIRUSTOTAL_API_KEY=your-key-here
+husk package path/to/skill_package/ --virustotal
+```
+
+VirusTotal's public API tier is free, no card required. Same posture
+as everything else optional in this project: never runs unless you
+explicitly ask, and only a SHA-256 hash of each file is ever sent,
+never the file's actual content.
 
 ## Optional: LLM semantic review - a backup, not the main event
 
@@ -208,7 +292,7 @@ exactly that.
 
 ## What v1 does NOT do yet
 
-- **Real-world recall is 61.5-64.4%, not 100%** (measured against 11,470 real confirmed-malicious samples across two independent datasets - see BENCHMARK.md for the full methodology). The main gap: **novel, semantically-disguised attacks with no code and no recognizable keywords** - a subtle instruction-blurring attack and a fake "compliance auditor" asking in plain prose for secrets, both missed by static analysis and saved openly in `tests/known_misses/` rather than hidden. This matches published research showing static pattern-matching tops out around 13-32% recall on novel/disguised attacks generally - not a Husk-specific flaw, but a real, honest limit of this entire approach. The optional `--llm-review` layer exists specifically for this gap.
+- **Real-world recall is 61.3-63.9%, not 100%** (measured against 11,225 real confirmed-malicious samples across two independent datasets - see BENCHMARK.md for the full methodology). The main gap: **novel, semantically-disguised attacks with no code and no recognizable keywords** - a subtle instruction-blurring attack and a fake "compliance auditor" asking in plain prose for secrets, both missed by static analysis and saved openly in `tests/known_misses/` rather than hidden. This matches published research showing static pattern-matching tops out around 13-32% recall on novel/disguised attacks generally - not a Husk-specific flaw, but a real, honest limit of this entire approach. The optional `--llm-review` layer exists specifically for this gap.
 - **Two structural limits no pre-execution scanner, static or LLM, can ever close**: Self-Mutating Poisoning (the malicious content doesn't exist in the file until the skill actually runs) and dynamically-generated payloads. Confirmed directly against real samples exhibiting both patterns.
 - Archive extraction currently unpacks ZIP; GZIP/7z/RAR are detected (a mismatched-extension archive still gets flagged) but not yet recursively unpacked
 - The AST taint tracker follows data flow within a file, including into a function through its parameters, but doesn't re-trace taint propagating deeper inside a callee's own body, and doesn't cross module/file boundaries
@@ -224,4 +308,10 @@ exactly that.
 
 ## License
 
-MIT
+AGPL-3.0-or-later. Changed from an earlier MIT-licensed version
+specifically to require that anyone running a modified version of
+Husk as a network service (a hosted scanning integration, for
+example) makes their modifications available too - use, modify, and
+self-host freely; a hosted integration built on top of this code
+stays open under the same terms. See [LICENSE](LICENSE) for the full
+text.

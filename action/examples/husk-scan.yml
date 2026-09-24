@@ -1,0 +1,35 @@
+name: Husk Skill Scan
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  schedule:
+    - cron: "0 6 * * 1"  # weekly, catches new detection rules on unchanged code
+
+permissions:
+  contents: read          # for actions/checkout
+  security-events: write  # for github/codeql-action/upload-sarif
+  actions: read           # only required for private repositories
+
+jobs:
+  husk-scan:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Scan with Husk
+        id: husk
+        uses: ctrl-adam/Husk/action@main
+        with:
+          path: "."
+          # Set to "false" to always upload results without failing the build:
+          fail-on-findings: "true"
+          # Optional, adds a known-malware binary signature check:
+          # virustotal-api-key: ${{ secrets.VIRUSTOTAL_API_KEY }}
+
+      - name: Show verdict
+        if: always()
+        run: |
+          echo "Husk verdict: ${{ steps.husk.outputs.verdict }}"

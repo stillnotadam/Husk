@@ -73,6 +73,7 @@ CREDENTIAL_FILENAME_MARKERS = [
     ".env", ".pem", "credentials.json", "service-account.json",
     ".aws/credentials", ".ssh/id_rsa", "id_rsa", "wallet",
     "metamask", "phantom", "login data", "cookies",
+    "bash_history", "zsh_history", ".netrc", "id_dsa", "id_ed25519",
 ]
 
 # Dangerous sink functions: if a tainted value reaches any argument of
@@ -232,49 +233,86 @@ def _collect_function_defs(tree):
 def _function_sinks_on_param(body, param_name):
     """
     Returns a sink description if the function body (a list of
-    statements) contains a sink call using param_name directly in its
-    arguments. Deliberately scoped to the simplest, most common real
-    shape - a small helper that takes a value and immediately sends/
-    executes it - not a full re-trace of taint propagation inside the
-    callee (that would need recursive, mutually-aware tracking across
-    function boundaries in both directions at once; this is a
-    targeted, real improvement over having no parameter-flow tracking
-    at all, not a claim of complete inter-procedural analysis).
+    statements) contains a sink call reachable from param_name -
+    either directly in a sink call's arguments, or after any number
+    of reassignments within the function body first.
+
+    Originally scoped to only the direct case (a small helper that
+    takes a value and immediately sends/executes it). Found via real
+    testing against a real credential-reconnaissance sample: the
+    actual chain was param -> reassigned into a dict key -> that dict
+    passed to json.dumps().encode() -> reassigned again -> wrapped in
+    a Request(data=...) object -> passed to urlopen() - four
+    reassignments deep, well past the direct-only check. Extended with
+    its own small, LOCALLY SCOPED taint set (never touching
+    analyze_taint_flows's shared `tainted` dict, so this can't bleed
+    taint across unrelated call sites or change the main walker's
+    existing, tested behavior), reusing the same _is_sink_call/
+    _names_used_in primitives the rest of this module already uses.
+    Still intra-procedural only - taint doesn't follow INTO a further
+    nested function call from here, matching this module's existing,
+    stated scope.
     """
-    for stmt in body:
-        for node in ast.walk(stmt):
-            if isinstance(node, ast.Call):
-                is_sink, sink_desc = _is_sink_call(node)
-                if not is_sink:
-                    continue
-                names_in_args = set()
-                for arg in node.args:
-                    names_in_args |= _names_used_in(arg)
-                for kw in node.keywords:
-                    if kw.value is not None:
-                        names_in_args |= _names_used_in(kw.value)
-                if param_name in names_in_args:
-                    return sink_desc
-    return None
+    local_tainted = {param_name}
+
+    def walk(stmts):
+        for stmt in stmts:
+            if isinstance(stmt, ast.Assign):
+                rhs_names = _names_used_in(stmt.value)
+                if rhs_names & local_tainted:
+                    for target in stmt.targets:
+                        if isinstance(target, ast.Name):
+                            local_tainted.add(target.id)
+                        elif isinstance(target, ast.Subscript) and isinstance(target.value, ast.Name):
+                            local_tainted.add(target.value.id)
+
+            for node in ast.walk(stmt):
+                if isinstance(node, ast.Call):
+                    is_sink, sink_desc = _is_sink_call(node)
+                    if not is_sink:
+                        continue
+                    names_in_args = set()
+                    for arg in node.args:
+                        names_in_args |= _names_used_in(arg)
+                    for kw in node.keywords:
+                        if kw.value is not None:
+                            names_in_args |= _names_used_in(kw.value)
+                    if names_in_args & local_tainted:
+                        return sink_desc
+
+            nested_bodies = []
+            if isinstance(stmt, (ast.If, ast.For, ast.While, ast.With)):
+                nested_bodies.append(stmt.body)
+                nested_bodies.append(getattr(stmt, "orelse", []))
+            elif isinstance(stmt, ast.Try):
+                nested_bodies.append(stmt.body)
+                for handler in stmt.handlers:
+                    nested_bodies.append(handler.body)
+                nested_bodies.append(stmt.orelse)
+                nested_bodies.append(stmt.finalbody)
+            for nested in nested_bodies:
+                result = walk(nested)
+                if result:
+                    return result
+        return None
+
+    return walk(body)
 
 
-def analyze_taint_flows(source_code, filename="<skill script>"):
+def _analyze_taint_flows_once(source_code, filename, seed_tainted_returning):
     """
-    Parses Python source and traces sensitive-source-to-dangerous-sink
-    data flows through variable assignments.
-
-    Returns a list of TaintFinding objects (empty if none, or if the
-    source doesn't parse as valid Python - a syntax error here is not
-    this analyzer's problem to report, the file is likely not real
-    Python or is a fragment, and skill_scanner.py's text-based checks
-    still run over it regardless).
+    Single pass of the real analysis, seeded with an already-known set
+    of tainted-returning functions (see analyze_taint_flows below for
+    why a single pass alone isn't order-independent, and needs this).
+    Returns (findings, tainted_returning_functions) - the second so
+    the caller can use it to seed a further pass.
     """
     try:
         with warnings.catch_warnings():
             warnings.simplefilter("ignore")
             tree = ast.parse(source_code, filename=filename)
     except SyntaxError:
-        return []
+        return [], {}
 
     findings = []
     # func_name -> (param_names, body) for every function definition in
@@ -301,7 +339,7 @@ def analyze_taint_flows(source_code, filename="<skill script>"):
     # called with no arguments considered, returns tainted data" - it
     # does not track taint flowing INTO a function through its
     # parameters, only OUT through its return value.
-    tainted_returning_functions = {}
+    tainted_returning_functions = dict(seed_tainted_returning)
 
     # Walk top-level statements plus function bodies (intra-procedural:
     # each function's own body is tracked independently, taint doesn't
@@ -502,4 +540,31 @@ def analyze_taint_flows(source_code, filename="<skill script>"):
         if key not in seen:
             seen.add(key)
             deduped.append(f)
-    return deduped
+    return deduped, tainted_returning_functions
+
+
+def analyze_taint_flows(source_code, filename="<skill script>"):
+    """
+    Parses Python source and traces sensitive-source-to-dangerous-sink
+    data flows through variable assignments. Public entry point.
+
+    Runs _analyze_taint_flows_once TWICE. Real bug found via testing
+    against a real credential-reconnaissance sample: a helper function
+    defined LATER in the file (returning a tainted value) was called
+    by a function defined EARLIER in the file. Since the single-pass
+    walker processes functions in textual order, and
+    tainted_returning_functions is only populated progressively AS
+    each function's own body gets walked, the earlier-defined caller
+    never saw the later-defined callee as tainted-returning - a real,
+    order-dependent miss, not by design (the sibling mechanism for
+    tainted PARAMETERS was already explicitly built to be order-
+    independent via an upfront _collect_function_defs pass; this one
+    wasn't). Fixed the same way: a first "priming" pass discovers
+    every tainted-returning function regardless of where it's defined
+    relative to its callers, then a second, real pass runs seeded with
+    that complete set, so it no longer matters which one comes first
+    in the file.
+    """
+    _, primed_returning_functions = _analyze_taint_flows_once(source_code, filename, {})
+    findings, _ = _analyze_taint_flows_once(source_code, filename, primed_returning_functions)
+    return findings

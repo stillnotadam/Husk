@@ -1,0 +1,82 @@
+name: "Husk Skill Scanner"
+description: >
+  Static security scanner for AI agent skill packages. Scans a path in
+  your repo and produces a SARIF report, findings show up directly in
+  this PR and your repo's Security tab via GitHub Code Scanning.
+author: "ctrl-adam"
+
+branding:
+  icon: "shield"
+  color: "orange"
+
+inputs:
+  path:
+    description: "Path to the skill package directory to scan"
+    required: false
+    default: "."
+  fail-on-findings:
+    description: >
+      Whether the action should fail (exit non-zero) if Husk flags
+      anything. Set to "false" to always upload the SARIF report
+      without failing the workflow itself.
+    required: false
+    default: "true"
+  virustotal-api-key:
+    description: >
+      Optional. Your own VIRUSTOTAL_API_KEY, to additionally check
+      bundled files against VirusTotal's known-malware database.
+      Never required; the static scan runs the same either way.
+    required: false
+    default: ""
+
+outputs:
+  sarif-path:
+    description: "Path to the generated SARIF report"
+    value: ${{ steps.scan.outputs.sarif-path }}
+  verdict:
+    description: "SAFE or FLAGGED"
+    value: ${{ steps.scan.outputs.verdict }}
+
+runs:
+  using: "composite"
+  steps:
+    - name: Set up Python
+      uses: actions/setup-python@v5
+      with:
+        python-version: "3.11"
+
+    - name: Install Husk
+      shell: bash
+      run: pip install husk-scanner --break-system-packages 2>/dev/null || pip install husk-scanner
+
+    - name: Run Husk
+      id: scan
+      shell: bash
+      env:
+        VIRUSTOTAL_API_KEY: ${{ inputs.virustotal-api-key }}
+      run: |
+        set +e
+        SARIF_PATH="husk-report.sarif"
+        if [ -n "$VIRUSTOTAL_API_KEY" ]; then
+          husk package "${{ inputs.path }}" --output "$SARIF_PATH" --virustotal
+        else
+          husk package "${{ inputs.path }}" --output "$SARIF_PATH"
+        fi
+        EXIT_CODE=$?
+        echo "sarif-path=$SARIF_PATH" >> "$GITHUB_OUTPUT"
+        if [ "$EXIT_CODE" -eq 0 ]; then
+          echo "verdict=SAFE" >> "$GITHUB_OUTPUT"
+        else
+          echo "verdict=FLAGGED" >> "$GITHUB_OUTPUT"
+        fi
+        if [ "${{ inputs.fail-on-findings }}" = "true" ]; then
+          exit $EXIT_CODE
+        else
+          exit 0
+        fi
+
+    - name: Upload SARIF to GitHub Code Scanning
+      if: always()
+      uses: github/codeql-action/upload-sarif@v3
+      with:
+        sarif_file: ${{ steps.scan.outputs.sarif-path }}

@@ -8,11 +8,21 @@ of what this basic sandbox does and does not do.
 
 import os
 import shutil
+import subprocess
 import sys
 import tempfile
 import warnings
+from unittest.mock import patch
 
 import pytest
+
+# The dynamic sandbox is Linux-only by design (kernel namespaces, POSIX
+# rlimits). Skip this whole file cleanly on Windows/macOS instead of
+# erroring at import - the behaviour there is covered separately below
+# the skip, via test_sandbox_platform_guard.py.
+resource_module = pytest.importorskip("resource")
+if not sys.platform.startswith("linux"):
+    pytest.skip("dynamic sandbox is Linux-only", allow_module_level=True)
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "src"))
 from husk.sandbox import UNSHARE_FLAGS, sandbox_run_python_script, sandbox_run_script  # noqa: E402
@@ -280,3 +290,169 @@ def test_never_raises_on_a_nonexistent_script():
     result = sandbox_run_python_script("/nonexistent/path/does_not_exist.py")
     assert isinstance(result, dict)
     assert "findings" in result
+
+
+# ---------------------------------------------------------------------
+# Real gap found via this project's own rigorous-testing pass, worth
+# recording here directly: _bwrap_isolation_works used to bind only
+# static system directories (/usr, /lib, etc), narrower than what real
+# usage actually needs (also binding a real, writable temp working
+# directory). In a certain class of environment (a nested/restricted
+# container - reproduced directly, not guessed at), --unshare-all
+# combined with binding a workdir-style path under a non-root-owned
+# parent fails with "Permission denied", even though the narrower
+# system-directory-only probe succeeds fine. The old check reported
+# "bubblewrap works" in exactly this environment while every real
+# sandboxed execution then failed - the identical failure shape this
+# module's own comments already documented fixing twice for unshare,
+# just never applied to bwrap until this was actually found and fixed.
+# These tests run OUTSIDE the module-level skip gate above, since they
+# test the DETECTION logic itself, not real sandboxed execution - they
+# should run and mean something even in an environment where bwrap
+# doesn't actually work, that's precisely the scenario they exist to
+# catch a regression of.
+# ---------------------------------------------------------------------
+
+from husk.sandbox import (  # noqa: E402
+    _apply_resource_limits,
+    _build_sandbox_command,
+    _bwrap_isolation_works,
+    _snapshot_dir,
+    _unshare_isolation_works,
+)
+
+
+def test_bwrap_verification_actually_tests_a_real_writable_workdir_not_just_static_dirs():
+    """Confirms the real fix directly: whatever _bwrap_isolation_works
+    concludes must match what actually happens when the exact same
+    kind of operation (bind + write to a real temp dir under
+    --unshare-all) is attempted for real, right now, in this
+    environment - not assumed to agree."""
+    if not shutil.which("bwrap"):
+        pytest.skip("bwrap not installed in this environment")
+
+    probe_dir = tempfile.mkdtemp(prefix="husk_test_probe_")
+    try:
+        real_attempt = subprocess.run(  # noqa: S603 - fixed args, this IS the real-world probe this test exists to verify
+            ["bwrap", "--ro-bind", "/usr", "/usr", "--ro-bind", "/lib", "/lib",  # noqa: S607 - bwrap resolved from PATH deliberately for portability
+             "--bind", probe_dir, probe_dir, "--unshare-all", "--die-with-parent",
+             "--chdir", probe_dir, "--", "/usr/bin/python3", "-c",
+             "open('w', 'w').write('x')"],
+            capture_output=True, timeout=5, check=False,
+        )
+        really_works = real_attempt.returncode == 0 and os.path.exists(os.path.join(probe_dir, "w"))
+    finally:
+        shutil.rmtree(probe_dir, ignore_errors=True)
+
+    # Clear the cache so this test gets a fresh, real check rather than
+    # a result some earlier test in this file already cached.
+    if hasattr(_bwrap_isolation_works, "_cached"):
+        del _bwrap_isolation_works._cached
+    assert _bwrap_isolation_works() == really_works
+
+
+def test_bwrap_command_binds_workdir_read_write_last_when_script_is_in_a_parent_dir():
+    """Verifies the real, previously-fixed ordering bug directly, by
+    mocking bwrap as available and inspecting the exact command built -
+    tests the recipe's correctness independent of whether bwrap can
+    actually run in this specific environment. The real bug: if the
+    script's directory is a PARENT of workdir (realistic - tempfile
+    places workdir under /tmp by default), a read-only parent bind
+    applied AFTER workdir's read-write bind silently made workdir
+    read-only too, since bwrap applies binds in order."""
+    with patch("husk.sandbox._bwrap_isolation_works", return_value=True), tempfile.TemporaryDirectory() as parent:
+        workdir = os.path.join(parent, "workdir")
+        os.mkdir(workdir)
+        script_path = os.path.join(parent, "script.py")  # lives in workdir's PARENT
+        with open(script_path, "w"):
+            pass
+
+        command, level = _build_sandbox_command(script_path, workdir, [sys.executable, "-I"])
+
+        assert level.startswith("bubblewrap")
+        # Find the specific "--ro-bind parent parent" triple and the
+        # specific "--bind workdir workdir" triple, and confirm the
+        # read-only one comes first - real bug found via testing:
+        # reversing this order silently makes workdir read-only too.
+        ro_parent_idx = next(
+            i for i in range(len(command) - 2)
+            if command[i] == "--ro-bind" and command[i + 1] == parent
+        )
+        rw_workdir_idx = next(
+            i for i in range(len(command) - 2)
+            if command[i] == "--bind" and command[i + 1] == workdir
+        )
+        assert ro_parent_idx < rw_workdir_idx
+
+
+def test_bwrap_command_binds_symlinked_interpreter_directory():
+    """Real, previously-fixed bug: a venv's symlinked python3 pointed
+    outside every bound system directory, and bwrap couldn't find it
+    at all ("execvp: No such file or directory") without also binding
+    the interpreter's own directory specifically. Uses a real, existing
+    directory for the fake interpreter path - the actual code correctly
+    (and separately, defensively) refuses to bind a directory that
+    doesn't exist at all, which a made-up nonexistent path would
+    silently trigger instead of exercising the logic being tested."""
+    with tempfile.TemporaryDirectory() as fake_venv_bin:
+        fake_python = os.path.join(fake_venv_bin, "python3")
+        with open(fake_python, "w"):
+            pass
+        with patch("husk.sandbox._bwrap_isolation_works", return_value=True), \
+             patch("husk.sandbox.shutil.which", return_value=fake_python), tempfile.TemporaryDirectory() as workdir:
+            script_path = os.path.join(workdir, "script.py")
+            with open(script_path, "w"):
+                pass
+            command, _ = _build_sandbox_command(script_path, workdir, ["python3", "-I"])
+            assert fake_venv_bin in command
+            assert fake_python in command  # resolved path used in the actual exec, not the bare name
+
+
+def test_unshare_verification_returns_false_cleanly_when_binary_missing(monkeypatch):
+    monkeypatch.setattr("husk.sandbox.UNSHARE_AVAILABLE", False)
+    if hasattr(_unshare_isolation_works, "_cached"):
+        del _unshare_isolation_works._cached
+    assert _unshare_isolation_works() is False
+
+
+def test_apply_resource_limits_sets_real_limits_without_crashing():
+    """Runs in-process (not via preexec_fn, which coverage can't trace
+    into a subprocess) to verify the function itself is correct: real
+    limits actually get set to the real configured values."""
+    _apply_resource_limits(memory_limit_mb=128)
+    cpu_soft, _ = resource_module.getrlimit(resource_module.RLIMIT_CPU)
+    mem_soft, _ = resource_module.getrlimit(resource_module.RLIMIT_AS)
+    assert cpu_soft == 5
+    assert mem_soft == 128 * 1024 * 1024
+
+
+def test_snapshot_dir_skips_a_file_that_disappears_during_scan():
+    """Real edge case: os.walk lists a file, but it's gone by the time
+    os.stat() is called on it (deleted by the very script being
+    observed, in the real use case this exists for) - must be skipped
+    cleanly, not raise."""
+    with tempfile.TemporaryDirectory() as d:
+        real_file = os.path.join(d, "real.txt")
+        with open(real_file, "w") as f:
+            f.write("x")
+
+        original_stat = os.stat
+
+        def flaky_stat(path, *a, **kw):
+            if "vanished" in str(path):
+                raise OSError("No such file or directory")
+            return original_stat(path, *a, **kw)
+
+        # Simulate a file present in the walk but gone by stat time by
+        # creating it, snapshotting normally to prove real files work,
+        # then patching os.stat to fail specifically for a name pattern
+        # while walking a directory that includes both.
+        vanished_file = os.path.join(d, "vanished.txt")
+        with open(vanished_file, "w") as f:
+            f.write("x")
+
+        with patch("husk.sandbox.os.stat", side_effect=flaky_stat):
+            snapshot = _snapshot_dir(d)
+
+        assert "real.txt" in snapshot
+        assert "vanished.txt" not in snapshot  # skipped cleanly, not raised

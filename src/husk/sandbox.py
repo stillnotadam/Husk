@@ -65,7 +65,15 @@ these inputs.
 """
 
 import os
-import resource
+
+try:
+    # Unix-only stdlib module. Imported defensively: the CLI imports this
+    # module at startup, so an unconditional import crashed the entire
+    # `husk` command on Windows - not just the sandbox feature. Real bug,
+    # found by running the test suite on a real Windows machine.
+    import resource
+except ImportError:  # Windows
+    resource = None  # type: ignore[assignment]
 import shutil
 import subprocess
 import sys
@@ -101,6 +109,12 @@ CPU_TIME_LIMIT_SECONDS = 5
 MEMORY_LIMIT_MB = 256
 MAX_PROCESSES = 10
 WALL_CLOCK_TIMEOUT_SECONDS = 8
+
+
+# The dynamic sandbox relies on Linux kernel features (bubblewrap /
+# unshare namespaces, POSIX rlimits via preexec_fn). It is not supported
+# elsewhere, and says so honestly rather than crashing or pretending.
+SANDBOX_SUPPORTED = sys.platform.startswith("linux") and resource is not None
 
 
 def _apply_resource_limits(memory_limit_mb=MEMORY_LIMIT_MB):
@@ -151,29 +165,50 @@ def _bwrap_isolation_works():
     property this module depends on for filesystem isolation) -
     verified with a real subprocess call, not assumed. Cached after
     the first check.
+
+    Real, live bug found via this project's own rigorous-testing pass,
+    not a hypothetical: this check used to bind only static system
+    directories (/usr, /lib, /lib64, /bin), which is narrower than what
+    _build_sandbox_command actually does in real usage - it ALSO binds
+    a real, writable temp working directory. In a certain class of
+    environment (a nested/restricted container - confirmed directly by
+    reproducing this exactly, not guessed at), --unshare-all combined
+    with binding a workdir-style path under a non-root-owned parent
+    fails with "Permission denied", even though binding only static
+    system directories succeeds fine. The old, narrower check reported
+    "bubblewrap works" in exactly this environment while real sandboxed
+    execution then failed every single time - the identical failure
+    shape this module's own comments already document fixing twice for
+    unshare, just never applied to bwrap until this was actually found.
+    Fixed by testing the exact same shape of operation real usage needs:
+    bind a real temp directory and confirm a file can actually be
+    written into it, not just that bwrap runs at all.
     """
     if not BWRAP_AVAILABLE:
         return False
     if not hasattr(_bwrap_isolation_works, "_cached"):
+        probe_dir = None
         try:
-            # Resolved to a full path (not a bare "bwrap") so this
-            # verification check itself can't be affected by PATH
-            # manipulation - the actual sandboxed execution already
-            # runs under a restricted PATH env, but this check runs in
-            # OUR OWN process's inherited environment, so it deserves
-            # the same discipline.
+            probe_dir = tempfile.mkdtemp(prefix="husk_bwrap_probe_")
             bwrap_path = shutil.which("bwrap") or "bwrap"
             proc = subprocess.run(  # noqa: S603 - fixed args, resolved binary path, not untrusted input
                 [bwrap_path, "--ro-bind", "/usr", "/usr", "--ro-bind", "/lib", "/lib",
                  "--ro-bind", "/lib64", "/lib64", "--ro-bind", "/bin", "/bin",
-                 "--unshare-all", "--die-with-parent",
+                 "--bind", probe_dir, probe_dir,
+                 "--unshare-all", "--die-with-parent", "--chdir", probe_dir,
                  "--", "/usr/bin/python3", "-c",
-                 "import os; assert not os.path.exists('/etc/hostname_marker_that_should_not_exist_anyway') and not os.path.isdir('/root')"],
+                 "import os; "
+                 "assert not os.path.exists('/etc/hostname_marker_that_should_not_exist_anyway') and not os.path.isdir('/root'); "
+                 "open('probe_write_test', 'w').write('ok')"],
                 capture_output=True, timeout=5, check=False,
             )
-            _bwrap_isolation_works._cached = proc.returncode == 0
+            wrote_successfully = os.path.exists(os.path.join(probe_dir, "probe_write_test"))
+            _bwrap_isolation_works._cached = proc.returncode == 0 and wrote_successfully
         except Exception:
             _bwrap_isolation_works._cached = False
+        finally:
+            if probe_dir:
+                shutil.rmtree(probe_dir, ignore_errors=True)
     return _bwrap_isolation_works._cached
 
 
@@ -466,6 +501,15 @@ def _sandbox_run(script_path, timeout=WALL_CLOCK_TIMEOUT_SECONDS):
         "stdout": "", "stderr": "", "files_created": [], "files_modified": [],
         "wall_clock_seconds": 0.0, "findings": [], "isolation_level": "none",
     }
+
+    if not SANDBOX_SUPPORTED:
+        result["findings"].append(
+            f"Dynamic sandbox skipped: it requires Linux (kernel namespaces "
+            f"and POSIX resource limits), and this machine is running "
+            f"{sys.platform}. The static scan above is unaffected. To use "
+            f"the sandbox, run Husk on Linux or inside WSL / a Linux container."
+        )
+        return result
 
     script_abs_path_check = os.path.abspath(script_path)
     interpreter_check = _interpreter_for(script_abs_path_check)

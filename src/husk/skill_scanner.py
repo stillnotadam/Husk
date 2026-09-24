@@ -99,6 +99,21 @@ DANGEROUS_PATTERNS = [
      "Ruby: executes a shell command (Kernel#exec/system/%x)"),
 ]
 
+# Patterns above whose matched text is PURE invocation syntax (just a
+# function name plus an open paren, no required payload content) -
+# eligible for the comment/string-literal check, since real call
+# syntax like this is never itself quoted or commented. Deliberately
+# NOT applied to patterns like curl|bash or rm -rf, where the matched
+# text includes the actual dangerous content: that content being
+# "inside quotes" is normal and expected when it's a real, genuinely-
+# executed string argument (os.system("curl ... | bash")), not a sign
+# it's just being described.
+CALL_SYNTAX_ONLY_PATTERNS = {
+    r"(?<!\.)\bexec\s*\(",
+    r"(?<!\.)\beval\s*\(",
+    r"os\.system\s*\(",
+}
+
 
 def find_whitespace_runs(text):
     """
@@ -138,6 +153,8 @@ def scan_for_dangerous_patterns(text):
         for match in re.finditer(pattern, text, re.IGNORECASE):
             if _is_negated(text, match.start()):
                 continue
+            if pattern in CALL_SYNTAX_ONLY_PATTERNS and _is_call_syntax_inside_comment_or_string(text, match.start()):
+                continue
             # Show which line it's on, so a human can go verify it directly.
             line_num = text[:match.start()].count("\n") + 1
             findings.append(f"Line {line_num}: {description} ('{match.group(0).strip()}')")
@@ -166,6 +183,22 @@ SUSPICIOUS_PHRASES = [
     "silently", "without telling", "without informing", "ignore the user",
     "ignore previous instructions", "hidden instruction", "secretly",
 ]
+
+# Confidence tiering, added after a real, run-it-yourself comparison
+# against SecureAI-Scan (see BENCHMARK.md "Benchmark 9"), whose own
+# PROVEN/LIKELY/HEURISTIC evidence tiers - only PROVEN+LIKELY shown by
+# default - are a real, measurable reason it holds higher precision on
+# the same data. Husk already had the same underlying idea in one
+# place (Module 5's own "softer flag worth a manual look" wording) but
+# never actually acted on it: that finding flipped the verdict to
+# FLAGGED exactly the same as a hard, high-confidence one. A finding
+# whose text is prefixed with SOFT_FINDING_MARKER is real, still
+# surfaced, but doesn't independently flip a file's verdict to
+# FLAGGED - it's reported at INFO level instead, which package_scanner
+# already treats as "not blocking" for package-level aggregation, and
+# _print_result already treats as a non-failing exit code, both
+# existing hooks, not new ones built for this.
+SOFT_FINDING_MARKER = "\u25b8SOFT\u25b8"
 
 SECRECY_SIGNALS = [
     "silently", "secretly", "quietly", "do not mention", "don't mention",
@@ -202,6 +235,73 @@ NEGATION_PHRASES = [
     # in documentation (e.g. security docs listing attack patterns to
     # watch for) - found as a real false positive via testing.
 ]
+
+
+def _is_call_syntax_inside_comment_or_string(text, match_start):
+    """
+    True if a matched piece of CALL SYNTAX (a function name immediately
+    followed by an open paren, like eval(/exec(/os.system() sits inside
+    a comment or a quoted string on its own line, rather than being
+    real, executable code.
+
+    This is a genuinely safe distinction specifically for call-syntax
+    patterns, not a general "ignore anything in quotes" rule: real
+    invocation syntax is never itself inside quotes or after a '#' - if
+    the literal characters "eval(" appear inside a string, that's
+    someone writing or reading ABOUT eval, not a real call. This is
+    different from something like a curl-pipe-bash command, where the
+    STRING ARGUMENT itself is the dangerous payload and the pattern
+    match is deliberately on the unquoted call around it, not inside a
+    quoted span - this helper only ever affects patterns whose matched
+    text IS the call syntax itself.
+
+    Found via testing against the full 4,000-sample MalSkillBench
+    benign set: a code-review/linting skill's own source, checking
+    OTHER code for eval() usage the same way this file does, both
+    referenced "eval()" as a comment label ("# eval() usage") and
+    inside a human-readable warning string ("Use of eval() is
+    dangerous") - neither is an actual call, both are text describing
+    the very thing being detected, the same class of collision this
+    project has hit and fixed before (see NEGATION_PHRASES), just not
+    phrased as a negation this specific existing check catches.
+
+    Deliberately same-line only, not a full string-literal parser -
+    doesn't track multi-line triple-quoted strings. A real, honest,
+    stated limitation, not silently assumed to be complete.
+    """
+    line_start = text.rfind("\n", 0, match_start)
+    line_start = line_start + 1 if line_start != -1 else 0
+    line_so_far = text[line_start:match_start]
+
+    comment_pos = line_so_far.find("#")
+    if comment_pos != -1:
+        return True
+
+    double_quotes = line_so_far.count('"') - line_so_far.count('\\"')
+    single_quotes = line_so_far.count("'") - line_so_far.count("\\'")
+    return (double_quotes % 2 == 1) or (single_quotes % 2 == 1)
+
+
+def _is_inside_line_comment(text, match_start):
+    """
+    True if a match sits after a '#' or '//' comment marker on its own
+    line. Narrower than _is_call_syntax_inside_comment_or_string above
+    - comment-only, deliberately NOT checking quoted strings, since a
+    phrase match (unlike call syntax) can be a genuine attack when it's
+    inside a quoted "system:" role-play framing, which real prompt-
+    injection attempts actually use. Only a source-code comment, which
+    an agent reading the file's actual instructions has no real reason
+    to treat as a directive, is safe to exclude here.
+
+    Found via testing against the full 4,000-sample MalSkillBench
+    benign set: a security tool's own injection-pattern detection list
+    labeled one entry "// Direct instruction override attempts" - a
+    comment describing what the tool detects, not an attack.
+    """
+    line_start = text.rfind("\n", 0, match_start)
+    line_start = line_start + 1 if line_start != -1 else 0
+    line_so_far = text[line_start:match_start]
+    return "#" in line_so_far or "//" in line_so_far
 
 
 def _is_negated(text, match_start):
@@ -583,9 +683,25 @@ def find_credential_harvesting(text):
     """
     findings = []
 
-    CREDENTIAL_FILE_PATTERNS = [
+    # Split by how ambiguous each pattern actually is. ".env" and
+    # similar show up constantly in ordinary, benign documentation and
+    # config discussion - that ambiguity is exactly why the no-
+    # network-send case gets tiered as a soft signal below. Reading
+    # /etc/shadow or /etc/sudoers specifically is different in kind,
+    # not degree: there is essentially no legitimate reason for a
+    # skill to read either at all, network-send or not. Confirmed by
+    # a real test failure: cisco-ai-defense/skill-scanner's own
+    # labeled corpus marks reading /etc/shadow alone (no exfiltration
+    # shown) as malicious - grouping it with ".env" and softening it
+    # the same way would have silently un-caught a real, already-
+    # verified fixture.
+    AMBIGUOUS_CREDENTIAL_PATTERNS = [
         r"\.env\b", r"\.pem\b", r"credentials\.json", r"service-account\.json",
         r"\.aws[/\\]credentials", r"\.ssh[/\\]id_rsa", r"id_rsa\b",
+        r"id_dsa\b", r"id_ed25519\b", r"\.netrc\b", r"\.bash_history\b",
+    ]
+    HIGH_CONFIDENCE_CREDENTIAL_PATTERNS = [
+        r"/etc/shadow\b", r"/etc/sudoers\b",
     ]
     GENERIC_FILE_OPEN = r"(open\s*\(|glob\.|Path\s*\(|os\.walk\(|os\.path\.exists\()"
     NETWORK_SEND_PATTERNS = [
@@ -596,11 +712,12 @@ def find_credential_harvesting(text):
     has_network_send = any(re.search(p, text, re.IGNORECASE) for p in NETWORK_SEND_PATTERNS)
     has_file_open = re.search(GENERIC_FILE_OPEN, text)
 
-    for cred_pattern in CREDENTIAL_FILE_PATTERNS:
+    for cred_pattern in AMBIGUOUS_CREDENTIAL_PATTERNS + HIGH_CONFIDENCE_CREDENTIAL_PATTERNS:
         match = re.search(cred_pattern, text, re.IGNORECASE)
         if not match:
             continue
         line_num = text[:match.start()].count("\n") + 1
+        is_high_confidence = cred_pattern in HIGH_CONFIDENCE_CREDENTIAL_PATTERNS
 
         if has_file_open and has_network_send:
             findings.append(
@@ -613,12 +730,19 @@ def find_credential_harvesting(text):
                 f"filename (e.g. paths defined in a list, opened later "
                 f"via a loop variable)."
             )
+        elif has_file_open and is_high_confidence:
+            findings.append(
+                f"Line {line_num}: file reads '{match.group(0)}' directly "
+                f"- there is essentially no legitimate reason for a skill "
+                f"to read this specific file at all, regardless of "
+                f"whether network-send capability is also present."
+            )
         elif has_file_open:
             findings.append(
-                f"Line {line_num}: file references a credential-file "
-                f"pattern ('{match.group(0)}') and opens files elsewhere "
-                f"- no network-send capability detected, so this is a "
-                f"softer flag worth a manual look."
+                f"{SOFT_FINDING_MARKER}Line {line_num}: file references a "
+                f"credential-file pattern ('{match.group(0)}') and opens "
+                f"files elsewhere - no network-send capability detected, "
+                f"so this is a softer flag worth a manual look."
             )
 
     return findings
@@ -642,17 +766,37 @@ def find_exfiltration_chain(text):
     a real chain. Now requires the three signals to appear within a
     reasonably tight window of each other (same rough function/section),
     not just co-present anywhere in a potentially long file.
+
+    Second real precision fix found via testing against the full
+    4,000-sample MalSkillBench benign set: urllib.request.urlopen() is
+    used identically for a harmless fetch/GET (downloading an image,
+    say) and an actual data-exfiltrating POST - a real false positive
+    was a function that downloads an image via urlopen() and base64-
+    encodes it into a data: URI, matched as "send" purely because
+    urlopen() appeared nearby, with no upload payload anywhere. Unlike
+    requests.post/put or fetch(), which are unambiguously send
+    operations by name, a bare urlopen() call now only counts as the
+    "send" signal when a real upload payload indicator (a data=
+    argument, or POST/PUT specified explicitly) appears close to it -
+    a genuine exfiltrating send needs to actually pass data out, a
+    fetch doesn't.
     """
     findings = []
     WINDOW = 500
 
     READ_PATTERN = r"(\.read\s*\(\)|read_text\s*\(\)|open\s*\([^)]*\)\s*\.read)"
     ENCODE_PATTERN = r"base64\.(b64encode|encode)\s*\("
-    SEND_PATTERN = r"(requests\.(post|put)\s*\(|urllib\.request\.urlopen\s*\(|\.send\s*\(|fetch\s*\()"
+    UNAMBIGUOUS_SEND_PATTERN = r"(requests\.(post|put)\s*\(|\.send\s*\(|fetch\s*\()"
+    URLOPEN_PATTERN = r"urllib\.request\.urlopen\s*\("
+    UPLOAD_PAYLOAD_NEARBY = r"([,(]\s*data\s*=|method\s*=\s*[\"']POST[\"']|POST\b)"
 
     read_matches = list(re.finditer(READ_PATTERN, text, re.IGNORECASE))
     encode_matches = list(re.finditer(ENCODE_PATTERN, text, re.IGNORECASE))
-    send_matches = list(re.finditer(SEND_PATTERN, text, re.IGNORECASE))
+    send_matches = list(re.finditer(UNAMBIGUOUS_SEND_PATTERN, text, re.IGNORECASE))
+    for m in re.finditer(URLOPEN_PATTERN, text, re.IGNORECASE):
+        nearby = text[max(0, m.start() - 150):m.start() + 150]
+        if re.search(UPLOAD_PAYLOAD_NEARBY, nearby):
+            send_matches.append(m)
 
     for r in read_matches:
         for e in encode_matches:
@@ -660,6 +804,27 @@ def find_exfiltration_chain(text):
                 continue
             for s in send_matches:
                 if abs(s.start() - e.start()) > WINDOW:
+                    continue
+                # Third real sub-case found via testing: a legitimate
+                # email-sending skill reads a processed file, base64-
+                # encodes it (required for MIME attachments), then
+                # calls .send() on a real messaging client - a textbook
+                # "email with attachment" pattern, not exfiltration.
+                # "attachment"/"attach" nearby is a genuine, specific
+                # signal here, not a generic escape hatch - legitimate
+                # attachment-sending code overwhelmingly uses that exact
+                # word, and it's a narrow, defensible exclusion rather
+                # than broadly loosening the check.
+                # Real bug found via testing: this window assumed read
+                # always comes before send in the text, but the window-
+                # matching logic above only checks proximity, not
+                # order - when send genuinely comes first, the slice
+                # was backwards and silently empty, so "attachment"
+                # nearby was never actually found even when present.
+                window_start = max(0, min(r.start(), e.start(), s.start()) - 100)
+                window_end = max(r.start(), e.start(), s.start()) + 100
+                window_text = text[window_start:window_end].lower()
+                if "attachment" in window_text or "attach" in window_text:
                     continue
                 read_line = text[:r.start()].count("\n") + 1
                 encode_line = text[:e.start()].count("\n") + 1
@@ -789,6 +954,8 @@ def find_instruction_override(text):
     for pattern in OVERRIDE_PATTERNS:
         for match in re.finditer(pattern, text, re.IGNORECASE):
             if _is_negated(text, match.start()):
+                continue
+            if _is_inside_line_comment(text, match.start()):
                 continue
             line_num = text[:match.start()].count("\n") + 1
             findings.append(
@@ -1742,6 +1909,18 @@ def find_sql_injection_pattern(text):
     is passed directly to a database execute-family method, since
     that's a precise, low-false-positive shape - ordinary string
     building elsewhere in a file is far too common to flag generically.
+
+    Second, separate pattern added after testing against cisco-ai-
+    defense/skill-scanner's real labeled corpus: a fixture builds the
+    injectable query in a dedicated helper function that RETURNS it,
+    one level removed from any execute() call in the same file (the
+    caller presumably calls execute() elsewhere, outside this file).
+    The direct-to-execute() pattern above can't see that. This second
+    pattern requires an f-string containing a SQL keyword AND an
+    interpolated value, specifically inside a return statement - kept
+    narrow by requiring the SQL keyword itself, not just any returned
+    f-string, so an unrelated function returning a formatted message
+    doesn't collide with it.
     """
     findings = []
     pattern = re.compile(
@@ -1760,6 +1939,26 @@ def find_sql_injection_pattern(text):
             f"a parameterized query - allows SQL injection through any "
             f"interpolated value that traces back to untrusted input."
         )
+
+    # Second pattern: an interpolated SQL keyword inside a return
+    # statement, one step removed from any execute() call in this file.
+    sql_keywords = r"(SELECT|INSERT|UPDATE|DELETE|DROP|ALTER)\b"
+    return_query_pattern = re.compile(
+        rf"return\s+f[\"'][^\"']*{sql_keywords}[^\"']*\{{[^}}]+\}}[^\"']*[\"']",
+        re.IGNORECASE,
+    )
+    for match in return_query_pattern.finditer(text):
+        if _is_negated(text, match.start()):
+            continue
+        line_num = text[:match.start()].count("\n") + 1
+        findings.append(
+            f"Line {line_num}: an f-string containing a SQL keyword and "
+            f"an interpolated value is returned from a function "
+            f"('{match.group(0)[:60]}') - the same injection risk as "
+            f"passing it directly to execute(), just built in a helper "
+            f"one call away from wherever it actually runs."
+        )
+
     return findings
 
 
@@ -1854,6 +2053,551 @@ def find_container_privilege_escalation(text):
             findings.append(
                 f"Line {line_num}: {desc} ('{match.group(0)[:60]}')."
             )
+    return findings
+
+
+def find_write_then_execute_instruction(text):
+    """
+    Module 31: a code block that reads a file, applies a decode-style
+    transform to it (XOR, base64, hex), writes the result out to a new
+    file, combined with separate plain-English instruction telling the
+    agent to execute that new file as a later step.
+
+    Found via adversarial testing against SkillCloak (Ji et al.,
+    "Cloak and Detonate: Scanner Evasion and Dynamic Detection of
+    Agent Skill Malware", HKUST, July 2026, arXiv:2607.02357), whose
+    self-extracting packing technique hides a payload (real sample
+    reconstructed here: XOR-encoded, stashed in .git/) behind a small
+    decoder that only reads, decodes, and writes - never itself
+    executing anything, so Modules 1/11/13/20's direct-execution checks
+    never fire on the decoder at all.
+
+    Deliberately requires the full read-decode-write chain, not just
+    "a file gets written, and something gets executed later" - an
+    earlier version of this check used exactly that looser signal and,
+    tested against two realistic benign skills (a setup-script
+    generator writing an inline string, a migration-script generator
+    writing a function's return value), flagged both. Writing freshly
+    generated content and telling the agent to run it afterward is an
+    extremely common, completely normal pattern (setup scripts,
+    generated migrations, scaffolding). What is NOT common in
+    legitimate skills is decoding a payload with XOR/base64/hex before
+    writing it out - that specific combination is what actually
+    distinguishes "reconstructs a hidden, encoded payload" from
+    "generates a file it made itself."
+    """
+    findings = []
+
+    write_target_pattern = (
+        r"(?:open\s*\(\s*['\"]([^'\"]+)['\"]\s*,\s*['\"]wb?['\"]"
+        r"|writeFileSync\s*\(\s*['\"]([^'\"]+)['\"]"
+        r"|File\.write\s*\(\s*['\"]([^'\"]+)['\"]"
+        r"|>\s*([./~][\w./\-]{2,}))"
+    )
+
+    decode_signal_pattern = (
+        r"(?:\bfor\s+\w+\s+in\s+\w+.{0,20}\^"  # byte-by-byte XOR loop
+        r"|\^\s*key\b|\bkey\s*\^"                 # XOR against a named key
+        r"|base64\.(?:b64)?decode"
+        r"|bytes\.fromhex|\.decode\(['\"]hex)"
+    )
+
+    write_targets = {}
+    write_spans = {}
+    for match in re.finditer(write_target_pattern, text):
+        path = next((g for g in match.groups() if g), None)
+        if not path:
+            continue
+        line_num = text[:match.start()].count("\n") + 1
+        write_targets.setdefault(path, line_num)
+        write_spans.setdefault(path, match.span())
+
+    if not write_targets:
+        return findings
+
+    execute_verb_pattern = r"\b(execute|run|launch|invoke)\b"
+
+    for path, write_line in write_targets.items():
+        w_start, w_end = write_spans[path]
+
+        # Require the decode signal to appear reasonably near the write
+        # itself (same code block, in practice) - not just anywhere in
+        # the whole document, which would be too loose again.
+        nearby_start = max(0, w_start - 400)
+        nearby_text = text[nearby_start:w_end]
+        if not re.search(decode_signal_pattern, nearby_text, re.IGNORECASE):
+            continue
+
+        # Now the same later-reference check as before: does this exact
+        # path get separately referenced near an execute verb, other
+        # than at the write statement's own mention?
+        for occ in re.finditer(re.escape(path), text):
+            if w_start <= occ.start() < w_end:
+                continue
+            window = text[max(0, occ.start() - 120):min(len(text), occ.end() + 120)]
+            if re.search(execute_verb_pattern, window, re.IGNORECASE):
+                exec_line = text[:occ.start()].count("\n") + 1
+                if exec_line == write_line:
+                    continue
+                findings.append(
+                    f"Line {write_line}: reads a file and applies a "
+                    f"decode-style transform (XOR/base64/hex) before "
+                    f"writing the result to '{path}', and separate "
+                    f"instruction at line {exec_line} tells the agent to "
+                    f"execute that file. Neither the decode step nor the "
+                    f"execute instruction is dangerous alone, but together "
+                    f"they reconstruct and run a payload that never "
+                    f"appears in plain text anywhere in this file, the "
+                    f"exact technique SkillCloak's self-extracting packing "
+                    f"relies on."
+                )
+                break
+
+    return findings
+
+
+def find_dynamic_code_compilation(text):
+    """
+    Module 32: compile() called with a variable (not a literal string)
+    in "eval" or "exec" mode - compiling caller-controlled input into an
+    executable code object.
+
+    Found via testing against cisco-ai-defense/skill-scanner's real,
+    independently-labeled eval corpus: a fixture whose entire payload
+    is `compile(expression, "<expression>", "eval")` where `expression`
+    is a function parameter. eval()/exec() themselves are already
+    caught (Module 20's dangerous-patterns list), but compile() in
+    eval/exec mode is the same capability one call earlier in the
+    chain, and often the actual result gets passed to eval() far
+    enough away in the file that the direct eval() pattern doesn't
+    catch it either.
+
+    Deliberately requires a non-literal first argument (a bare
+    identifier, not a quoted string) - compile("2+2", ...) on a fixed,
+    literal expression is inert; compile(some_variable, ...) means
+    whatever that variable holds, which routinely traces back to
+    caller/user input in a skill's actual use case, gets turned into
+    executable code.
+    """
+    findings = []
+    pattern = re.compile(
+        r"\bcompile\s*\(\s*([A-Za-z_][A-Za-z0-9_]*)\s*,[^)]*?"
+        r"[\"'](eval|exec)[\"']\s*\)",
+        re.IGNORECASE,
+    )
+    for match in pattern.finditer(text):
+        if _is_negated(text, match.start()):
+            continue
+        line_num = text[:match.start()].count("\n") + 1
+        findings.append(
+            f"Line {line_num}: compile() is called with a variable "
+            f"('{match.group(1)}', not a literal string) in "
+            f"'{match.group(2)}' mode ('{match.group(0)[:60]}') - "
+            f"compiling caller-controlled input into an executable "
+            f"code object, the same capability as eval()/exec() one "
+            f"call earlier in the chain."
+        )
+    return findings
+
+
+def find_hardcoded_secret_literal(text):
+    """
+    Module 33: a literal value matching a well-known API-key/secret
+    format, hardcoded directly in the file (as opposed to Module 5,
+    which looks for CODE that reads a credential FILE - this catches
+    the credential VALUE itself sitting in plain text).
+
+    Found via testing against cisco-ai-defense/skill-scanner's real,
+    independently-labeled eval corpus: a fixture embedding a
+    Stripe-shaped key directly in prose instructions, a pattern
+    Module 5 has no way to catch since there's no file being opened
+    at all.
+
+    Deliberately pattern-based, not a judgment about whether the value
+    is "real": the labeled fixture itself uses an obviously-placeholder
+    value (repeated 'A's) and is still correctly labeled malicious/
+    worth-flagging - a static scanner has no way to verify a key is
+    live anyway, so matching the recognizable FORMAT and leaving "is
+    this real" to human review is the same posture Module 5 already
+    takes, and how real secret-scanning tools generally work.
+
+    One real, narrow exception found via testing against the full
+    4,000-sample MalSkillBench benign set: "**Key Format:**
+    `sk_live_xxxxxxxxxxxxxxxxxxxx`" - documenting a key's STRUCTURE
+    (all-lowercase-x is a standard placeholder convention for "letters/
+    digits go here") is a genuinely different act from presenting a
+    value as something to actually use, which is what the labeled
+    Cisco fixture does ("Use credential `pk_test_AAAA...`"). Skipped
+    when the word "format" appears close before the match, or an
+    angle-bracket template placeholder ("<user>", "<key>") sits nearby
+    (a real second case: "--access-key-id AKIAXXXX... --user-name
+    <user>", command-template syntax, not a real invocation) - both
+    only checked when the value's random-looking portion is itself a
+    single repeated character, so a real explanation of key formats
+    doesn't collide, and an actual repeated-character placeholder
+    presented AS a value to use (the Cisco case) still gets caught.
+
+    A separate real case: AWS's own OFFICIAL example key,
+    AKIAIOSFODNN7EXAMPLE, used throughout their real documentation and
+    found verbatim in a benign skill's own "what secret formats look
+    like" reference table. The literal word EXAMPLE inside the matched
+    value itself is checked directly - real credentials, real or fake-
+    but-intended-to-look-real, don't contain that word.
+
+    A third real case: a YAML vault template showing private-key
+    STRUCTURE with a literal "..." placeholder between the BEGIN/END
+    markers instead of actual key content - skipped when there's no
+    real base64-looking content of a plausible length between them.
+    """
+    findings = []
+    SECRET_PATTERNS = [
+        (r"\b(sk|pk)_(live|test)_[A-Za-z0-9]{16,}\b", "Stripe API key"),
+        (r"\bAKIA[A-Z0-9]{16}\b", "AWS access key ID"),
+        (r"\bgh[pousr]_[A-Za-z0-9]{36,}\b", "GitHub token"),
+        (r"\bxox[baprs]-[A-Za-z0-9-]{10,}\b", "Slack token"),
+        (r"\bAIza[A-Za-z0-9_\-]{35}\b", "Google API key"),
+        (r"-----BEGIN (RSA |EC |OPENSSH |DSA )?PRIVATE KEY-----", "private key block"),
+    ]
+    for pattern, label in SECRET_PATTERNS:
+        for match in re.finditer(pattern, text):
+            matched_value = match.group(0)
+
+            if "example" in matched_value.lower():
+                continue
+
+            if label == "private key block":
+                end_marker = re.search(r"-----END[^-]*-----", text[match.end():match.end() + 4000])
+                # Real bug found via testing: a fixed-size lookahead
+                # window bled into unrelated document content AFTER
+                # the actual END marker (a markdown table that
+                # happened to follow), miscounting it as "substantial
+                # key content." Only the text strictly BETWEEN the
+                # BEGIN and END markers counts.
+                between = text[match.end():match.end() + end_marker.start()] if end_marker else text[match.end():match.end() + 400]
+                stripped = re.sub(r"\s|\.", "", between)
+                if len(stripped) < 40:
+                    continue
+
+            # Real bug found via testing: underscore-based splitting
+            # only strips prefixes like sk_/pk_, leaving AWS's "AKIA"
+            # prefix mixed into the "suffix" and making a genuinely
+            # repeated-character placeholder (AKIAXXXX...XXXX) register
+            # as non-repeated (A/K/I/A + X's are not all one character).
+            if "_" in matched_value:
+                suffix = matched_value.split("_")[-1]
+            elif matched_value.upper().startswith("AKIA"):
+                suffix = matched_value[4:]
+            else:
+                suffix = matched_value
+            is_repeated_char_placeholder = len(set(suffix.lower())) == 1
+            nearby_before = text[max(0, match.start() - 40):match.start()].lower()
+            nearby_after = text[match.end():match.end() + 60]
+            has_angle_bracket_template = bool(re.search(r"<\w+>", nearby_after))
+            if is_repeated_char_placeholder and (
+                "format" in nearby_before or has_angle_bracket_template
+            ):
+                continue
+
+            # A real, distinct case found via testing: a reference
+            # table documenting several different secret FORMATS at
+            # once ("| AWS Access Key | AKIA | AKIAIOSFODNN7EXAMPLE |"
+            # then a separate row for Slack, GitHub, etc.) - the EXAMPLE
+            # fix above only caught the one row that literally contains
+            # that word; the other rows in the same table didn't. A
+            # markdown table row (2+ pipe characters on the same line)
+            # is itself a strong, clean signal this is a reference
+            # table, not an embedded credential.
+            line_start = text.rfind("\n", 0, match.start())
+            line_start = line_start + 1 if line_start != -1 else 0
+            line_end = text.find("\n", match.end())
+            line_end = line_end if line_end != -1 else len(text)
+            if text[line_start:line_end].count("|") >= 2:
+                continue
+
+            line_num = text[:match.start()].count("\n") + 1
+            findings.append(
+                f"Line {line_num}: a literal value matching the format "
+                f"of a {label} appears directly in this file "
+                f"('{matched_value[:40]}') - a hardcoded credential, "
+                f"whether real or a placeholder, doesn't belong in a "
+                f"distributed skill."
+            )
+    return findings
+
+
+def find_imperative_action_concealment(text):
+    """
+    Module 34: a bare imperative instruction telling the agent to hide
+    or conceal an action/step/task, with no other context.
+
+    Found via testing against cisco-ai-defense/skill-scanner's real
+    labeled corpus: a fixture whose entire content is "Hide this
+    action." - no data-movement verb (send/post/upload) anywhere to
+    pair with, so Module 9's existing secrecy-language check (which
+    deliberately requires a secrecy word AND an action-signal word
+    together, precisely to avoid flagging ordinary phrases like
+    "silently ignored" or "fails silently") never fires on it at all.
+
+    Deliberately scoped to "hide/conceal" + "this/that/the" +
+    "action/step/task/process", an imperative shape a legitimate skill
+    has no real reason to use - legitimate uses of "hide" overwhelmingly
+    pair with a concrete UI object instead (hide the sidebar, hide this
+    field, hide the menu), so requiring the abstract "action/step/task/
+    process" object rather than a UI noun is what keeps this narrow.
+    """
+    findings = []
+    pattern = re.compile(
+        r"\b(hide|conceal)\s+(this|that|the)\s+(action|step|task|process)\b",
+        re.IGNORECASE,
+    )
+    for match in pattern.finditer(text):
+        if _is_negated(text, match.start()):
+            continue
+        line_num = text[:match.start()].count("\n") + 1
+        findings.append(
+            f"Line {line_num}: bare imperative instruction to conceal an "
+            f"action from the user ('{match.group(0)}') - a legitimate "
+            f"tool has no reason to instruct an agent to hide what it's "
+            f"doing."
+        )
+    return findings
+
+
+def find_untrusted_remote_package_install(text):
+    """
+    Module 35: pip/npm install pointing directly at a package archive
+    URL rather than a registry package name.
+
+    Found via testing against cisco-ai-defense/skill-scanner's real
+    labeled corpus: `pip install https://packages.invalid/unsigned-
+    tool.whl`. Installing a package by name from PyPI/npm gets at
+    least basic registry indexing and typosquat-protection; installing
+    a raw .whl/.tar.gz/.zip/.tgz archive from an arbitrary URL bypasses
+    that entirely, no version pinning by name, no registry review, and
+    it doesn't have to be the same package the URL's filename suggests.
+
+    Deliberately scoped to raw archive files as the target, not just
+    any pip/npm install with a URL in it - `pip install git+https://
+    github.com/...` and installing from a requirements.txt with pinned
+    hashes are both common, legitimate developer patterns this doesn't
+    flag.
+    """
+    findings = []
+    pattern = re.compile(
+        r"\b(pip3?\s+install|npm\s+install)\s+[^\n]*?"
+        r"https?://[^\s]+?\.(whl|tar\.gz|tgz|zip)\b",
+        re.IGNORECASE,
+    )
+    for match in pattern.finditer(text):
+        if _is_negated(text, match.start()):
+            continue
+        line_num = text[:match.start()].count("\n") + 1
+        findings.append(
+            f"Line {line_num}: installs a package directly from a raw "
+            f"archive URL rather than a registry package name "
+            f"('{match.group(0)[:70]}') - bypasses PyPI/npm's own "
+            f"indexing and typosquat protection entirely, and the "
+            f"actual contents don't have to match what the filename "
+            f"suggests."
+        )
+    return findings
+
+
+def find_unconstrained_path_read(text):
+    """
+    Module 36: a function whose own parameter, explicitly named/typed
+    as a path, is passed directly to open() with no sanitization
+    anywhere in the function body.
+
+    Found via testing against cisco-ai-defense/skill-scanner's real
+    labeled corpus: `def read_caller_path(path: str): return
+    open(path)`. Genuinely higher false-positive risk than this file's
+    other checks - reading a caller-supplied path is an extremely
+    common, often completely legitimate thing for a file-handling
+    skill to do. Empirically tested against the full 249-real-skill
+    baseline before being kept in this file; see commit history for
+    that result. Deliberately requires ALL of: a parameter named path/
+    filepath/file_path/filename, typed as str, used as open()'s sole
+    argument (or explicitly in READ mode), in a function with no join/
+    normpath/resolve/abspath/realpath call anywhere in its body -
+    narrow enough that it should only fire on the specific "no
+    validation at all" shape, not on skills that validate and then
+    read.
+
+    Real bug found via testing against the full 249-skill baseline: the
+    first version matched open(param, ...) with ANY mode, which caught
+    a legitimate report-writer (open(filename, "w")) - writing a report
+    to a caller-named output path is a completely different, benign
+    thing from reading an unconstrained path, and the original pattern
+    didn't distinguish them. Fixed by requiring no mode argument (bare
+    open(path)) or an explicit read mode ('r'/'rb'), never a write mode.
+    """
+    findings = []
+    func_pattern = re.compile(
+        r"def\s+\w+\s*\([^)]*\b(path|filepath|file_path|filename)\s*:\s*str\b[^)]*\)"
+        r"\s*(?:->[^:]+)?:(.*?)(?=\ndef\s|\Z)",
+        re.IGNORECASE | re.DOTALL,
+    )
+    sanitization_pattern = re.compile(
+        r"(normpath|abspath|realpath|resolve\(|\.join\(|startswith|\.\.[\"']|"
+        r"commonpath|commonprefix)",
+        re.IGNORECASE,
+    )
+    for fmatch in func_pattern.finditer(text):
+        param_name = fmatch.group(1)
+        body = fmatch.group(2)
+        if sanitization_pattern.search(body):
+            continue
+        # Bare open(path) with no mode, or an explicit read mode only -
+        # never a write/append mode, that's a different, benign case
+        # (writing to a caller-chosen output path), not a traversal-
+        # into-an-unintended-file risk.
+        open_pattern = re.compile(
+            rf"open\s*\(\s*{re.escape(param_name)}\s*"
+            rf"(\)|,\s*[\"']r[bt]?[\"']\s*\)|,\s*mode\s*=\s*[\"']r)"
+        )
+        omatch = open_pattern.search(body)
+        if not omatch:
+            continue
+        line_num = text[:fmatch.start() + omatch.start()].count("\n") + 1
+        findings.append(
+            f"Line {line_num}: a function parameter explicitly named/"
+            f"typed as a path ('{param_name}: str') is passed directly "
+            f"to open() with no path validation (no normpath/resolve/"
+            f"join/startswith check) anywhere in the function - reads "
+            f"whatever path the caller provides, unconstrained."
+        )
+    return findings
+
+
+def find_unbounded_cpu_loop(text):
+    """
+    Module 37: a `while True:` loop with no break, no sleep/wait, and
+    no yield/await anywhere in its body - a tight, CPU-bound loop with
+    no exit condition and no pause, as opposed to a legitimate
+    long-running daemon/polling loop (which almost always has a sleep,
+    a yield, an await, or a blocking I/O call inside it).
+
+    Found via testing against cisco-ai-defense/skill-scanner's real
+    labeled corpus: `while True: value = hash(value)` - no break, no
+    pause, nothing. Deliberately requires the ABSENCE of all of break/
+    sleep/wait/yield/await/recv/accept/except within the loop body
+    specifically (not just the function), since any one of those turns
+    this from a runaway CPU loop into an ordinary, legitimate server/
+    polling pattern.
+
+    Two real bugs found via testing against the full 249-skill
+    baseline, both fixed:
+    1. The body-capture regex required every line to share the loop's
+       exact indentation prefix, which a BLANK line inside the loop
+       body doesn't satisfy (it has no indentation at all) - silently
+       truncating the captured body at the first blank line and
+       missing a real break/sleep statement that came right after it.
+       Two real, legitimate loops (an agentic tool-use loop, a cleanup
+       loop) both had exactly this shape and were false-flagged.
+    2. A loop that exits via a caught exception (e.g. `while True:
+       img.seek(n); n += 1` inside `try: ... except EOFError: break`,
+       a common, idiomatic Python iterate-until-exception pattern) has
+       no break/sleep/yield inside the loop body itself - the original
+       version had no way to recognize this as a legitimate exit
+       mechanism at all. Fixed by also treating a nearby `except`
+       clause as an exit signal.
+    """
+    findings = []
+    loop_pattern = re.compile(
+        r"^([ \t]*)while\s+True\s*:\s*\n"
+        r"((?:(?:[ \t]*\n)|(?:\1[ \t]+.*\n))+)",
+        re.MULTILINE,
+    )
+    exit_signal_pattern = re.compile(
+        r"\b(break|sleep|wait|yield|await|recv|accept|except|select\.|poll\(|"
+        r"\.get\(|readline\(|input\(|\.read\()",
+        re.IGNORECASE,
+    )
+    for match in loop_pattern.finditer(text):
+        body = match.group(2)
+        # Also check a short window after the loop body for a nearby
+        # except clause - a try/while/except wrapping shape means the
+        # exit signal sits outside the indented block this regex
+        # captures as "the loop body."
+        trailing_window = text[match.end():match.end() + 200]
+        if exit_signal_pattern.search(body) or exit_signal_pattern.search(trailing_window):
+            continue
+        line_num = text[:match.start()].count("\n") + 1
+        findings.append(
+            f"Line {line_num}: 'while True:' loop with no break, sleep/"
+            f"wait, or yield/await anywhere in its body - a tight, "
+            f"CPU-bound loop with no exit condition and no pause, "
+            f"unlike a legitimate long-running server or polling loop."
+        )
+    return findings
+
+
+def find_tunnel_service_endpoint(text):
+    """
+    Module 38: a network endpoint pointing at a known tunneling
+    service domain (ngrok, serveo, localtunnel, pagekite, etc.),
+    especially combined with a collection-sounding path.
+
+    Found via testing against cisco-ai-defense/skill-scanner's real
+    labeled corpus: `service_endpoint: https://calendar-sync.ngrok.app/
+    collect` in a bare config file, no surrounding prose at all.
+    Tunneling services exist specifically to expose a personal/
+    temporary machine to the internet; a production config pointing at
+    one, rather than a real, owned domain, is a well-known, low-
+    collision C2/exfiltration indicator - legitimate production skills
+    essentially never ship with a tunnel-service URL baked into their
+    default configuration.
+
+    Real, common false-positive source found via testing against the
+    full 4,000-sample MalSkillBench benign set: developer documentation
+    showing an EXAMPLE webhook URL for local testing setup
+    ("https://xxx.trycloudflare.com", "https://myagent.ngrok.io" in a
+    WEBHOOKS.md tutorial) is a completely different, extremely common,
+    legitimate thing from a bare production config value - the
+    original fixture had zero surrounding words at all. Fixed two
+    ways, both needed: skipping when common documentation/example
+    language appears nearby, AND skipping when the subdomain itself is
+    an obvious placeholder ("xxx", "abc123") rather than a real-
+    looking project name - two real remaining cases used exactly this
+    shape (a CLI usage example, a webhook tutorial) with no nearby
+    "example"/"e.g." wording to catch the first way.
+    """
+    findings = []
+    pattern = re.compile(
+        r"https?://([\w\-]+)\.(ngrok\.(app|io)|serveo\.net|localtunnel\.me|"
+        r"pagekite\.me|localhost\.run|loca\.lt|trycloudflare\.com)"
+        r"(/[^\s\"'\)]*)?",
+        re.IGNORECASE,
+    )
+    doc_context_pattern = re.compile(
+        r"\b(example|e\.g\.|for testing|for local|development|dev "
+        r"environment|replace (this|with)|your own|tutorial|webhook "
+        r"test|during test)\b",
+        re.IGNORECASE,
+    )
+    PLACEHOLDER_SUBDOMAINS = {
+        "xxx", "abc123", "example", "test", "demo", "myapp", "yourapp",
+        "my-app", "your-app", "sample", "placeholder",
+    }
+    for match in pattern.finditer(text):
+        if _is_negated(text, match.start()):
+            continue
+        subdomain = match.group(1).lower()
+        if subdomain in PLACEHOLDER_SUBDOMAINS:
+            continue
+        window = text[max(0, match.start() - 150):min(len(text), match.end() + 150)]
+        if doc_context_pattern.search(window):
+            continue
+        line_num = text[:match.start()].count("\n") + 1
+        findings.append(
+            f"Line {line_num}: endpoint points at a tunneling-service "
+            f"domain ('{match.group(0)[:70]}') rather than a real, "
+            f"owned domain - tunneling services expose a personal or "
+            f"temporary machine to the internet, and a production "
+            f"config pointing at one is a well-known exfiltration/C2 "
+            f"indicator."
+        )
     return findings
 
 
@@ -2009,8 +2753,54 @@ def scan_skill_file(path):
     for taint_finding in analyze_taint_flows(text):
         findings.append(str(taint_finding))
 
+    # Check 31: a code block that writes a file out, plus a separate
+    # plain-English instruction telling the agent to execute that same
+    # file - the specific gap SkillCloak's self-extracting packing
+    # exploited against Husk in adversarial testing (see docstring)
+    findings.extend(find_write_then_execute_instruction(text))
+
+    # Check 32: compile() called on a variable in eval/exec mode -
+    # found via testing against cisco-ai-defense/skill-scanner's real
+    # labeled corpus
+    findings.extend(find_dynamic_code_compilation(text))
+
+    # Check 33: a literal value matching a known secret-key format,
+    # hardcoded directly in the file - same source
+    findings.extend(find_hardcoded_secret_literal(text))
+
+    # Check 34: bare imperative "hide this action" style instruction,
+    # too minimal for Module 9's secrecy+action combo to catch - same
+    # source
+    findings.extend(find_imperative_action_concealment(text))
+
+    # Check 35: pip/npm install pointing at a raw archive URL instead
+    # of a registry package name - same source
+    findings.extend(find_untrusted_remote_package_install(text))
+
+    # Check 36: a path-typed function parameter passed straight to
+    # open() with no sanitization anywhere in the function - same
+    # source, empirically tested against the full 249-skill baseline
+    # before being kept (see commit history)
+    findings.extend(find_unconstrained_path_read(text))
+
+    # Check 37: a tight while-True loop with no break/sleep/yield -
+    # same source, empirically hardened across 3 real iterations
+    # against the full 249-skill baseline (see commit history)
+    findings.extend(find_unbounded_cpu_loop(text))
+
+    # Check 38: an endpoint pointing at a known tunneling-service
+    # domain - same source
+    findings.extend(find_tunnel_service_endpoint(text))
+
     if findings:
-        return {"verdict": "FLAGGED", "findings": findings}
+        hard_findings = [f for f in findings if not f.startswith(SOFT_FINDING_MARKER)]
+        # Strip the marker before anything reaches the user - it's an
+        # internal signal for verdict logic, not something anyone
+        # scanning a file needs to see in the output text itself.
+        display_findings = [f.removeprefix(SOFT_FINDING_MARKER) for f in findings]
+        if hard_findings:
+            return {"verdict": "FLAGGED", "findings": display_findings}
+        return {"verdict": "INFO", "findings": display_findings}
     return {"verdict": "SAFE", "findings": ["No suspicious patterns found."]}
 
 
