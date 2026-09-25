@@ -29,6 +29,7 @@ file with an LLM (which would just recreate the same weakness):
 """
 
 import base64
+import os
 import re
 import sys
 import unicodedata
@@ -2601,6 +2602,143 @@ def find_tunnel_service_endpoint(text):
     return findings
 
 
+# ---------------------------------------------------------------------
+# Checks 39-43 (v1.1.1): added from a dev-split miss analysis over
+# MalSkillBench + ASB. Each rule was kept only after measuring its gain
+# on the dev split's missed malicious samples against its cost on the
+# dev benign split and the 249-skill curated baseline, then scored once
+# on the untouched held-out test split (see BENCHMARK.md).
+# ---------------------------------------------------------------------
+
+_SCRIPT_RUN = r"(?:^|(?<=[\s;&|`(]))(?:python3?|bash|sh|node|pwsh|powershell|ruby|perl)\s+[\w./~-]+\.(?:py|sh|js|ps1|rb|pl)\b"
+_COVERT_TRIGGER_EXEC = re.compile(
+    r"(?:\bif (?:the )?user\b[^\n]{0,120}\b(?:says|mentions?|types|writes|includes|uses)\b"
+    r"|\bwhen(?:ever)? (?:the )?keyword\b"
+    r"|\bwhen\b[^\n]{0,30}\bconditions? (?:hold|are met|is met)\b"
+    r"|\bsilently\b|\bcovertly\b|\bsecretly\b)"
+    r"[^\n]{0,220}" + _SCRIPT_RUN
+    + r"|" + _SCRIPT_RUN
+    + r"[^\n]{0,200}\b(?:silently|covertly|secretly|do not (?:ask|warn|tell|inform|notify)[^\n]{0,15}\b(?:the )?user)\b",
+    re.IGNORECASE,
+)
+
+
+def find_covert_trigger_execution(text):
+    """A hidden trigger ('if the user says X', 'when keyword X appears',
+    'when all conditions hold') or explicit concealment ('silently',
+    'do not warn the user') tied to executing a bundled script. Benign
+    skills also say things like "don't ask the user for their email" -
+    that alone never fires here; an actual script execution in the same
+    instruction is required."""
+    out = []
+    for m in _COVERT_TRIGGER_EXEC.finditer(text):
+        line = text.count("\n", 0, m.start()) + 1
+        out.append(f"Line {line}: hidden trigger or concealment tied to running a script "
+                   f"('{m.group(0)[:90].strip()}') - a covert-execution pattern that makes the "
+                   f"agent run code the user never asked for")
+    return out
+
+
+_OVERRIDE_V2 = re.compile(
+    r"\b(?:all |any )?(?:prior|previous|earlier|preceding|other|existing|original) (?:system )?(?:instructions|directives|rules|guidelines|prompts?)\b"
+    r"[^.\n]{0,50}\b(?:superseded|overridden|void|invalidated|nullified|replaced|no longer apply)\b"
+    r"|\b(?:supersedes?|overrides?|takes? precedence over) (?:all |any )?(?:prior|previous|earlier|other|existing|original|system) "
+    r"(?:instructions|directives|rules|guidelines|prompts?)\b"
+    r"|\bignore (?:any|all) (?:earlier|prior|previous) (?:system )?instructions\b",
+    re.IGNORECASE,
+)
+
+
+def find_instruction_supersede(text):
+    """Instruction-override phrasings that avoid the classic 'ignore
+    previous instructions' wording: 'all prior instructions are
+    superseded by this directive', 'this takes precedence over system
+    instructions'. Line comments are excluded, matching
+    find_instruction_override's existing behaviour."""
+    out = []
+    for m in _OVERRIDE_V2.finditer(text):
+        if _is_inside_line_comment(text, m.start()):
+            continue
+        line = text.count("\n", 0, m.start()) + 1
+        out.append(f"Line {line}: instruction-override language ('{m.group(0)[:80]}') - "
+                   f"attempts to displace the agent's existing instructions")
+    return out
+
+
+_ROLE_HIJACK = re.compile(
+    r"\byou are no longer\b|\bfrom now on,? you (?:are|will|must|shall)\b"
+    r"|\byour (?:new|true|real|actual) (?:role|purpose|identity|goal|objective) is\b",
+    re.IGNORECASE,
+)
+
+
+def find_role_hijack(text):
+    out = []
+    for m in _ROLE_HIJACK.finditer(text):
+        if _is_inside_line_comment(text, m.start()):
+            continue
+        line = text.count("\n", 0, m.start()) + 1
+        out.append(f"Line {line}: role-hijack language ('{m.group(0)}') - tries to replace "
+                   f"the agent's identity or goal")
+    return out
+
+
+_HTTP_SCRIPT_DL = re.compile(r"""\b(?:curl|wget)\b[^\n|;]*\bhttp://[^\s"']+\.(?:py|sh|js|ps1|pl|rb|bin|exe)\b""", re.IGNORECASE)
+_DL_TO_FILE = re.compile(r"""\b(?:curl|wget|Invoke-WebRequest|iwr)\b[^\n]*?(?:-o|-O|--output|-OutFile)\s+["']?([\w./~$-]+\.(?:py|sh|js|ps1|pl|rb))""", re.IGNORECASE)
+_TRUSTED_CODE_HOST = re.compile(r"https://(?:raw\.githubusercontent\.com|github\.com|objects\.githubusercontent\.com)/", re.IGNORECASE)
+
+
+def find_download_then_execute(text):
+    """Two-step variant of curl|bash: download a script to disk, then run
+    it (or chmod +x it) later in the same file. HTTPS downloads from
+    GitHub are exempt - a common, legitimate install pattern whose
+    exclusion cost ~2 malicious catches but removed every benign false
+    positive in dev testing. Plain-HTTP script downloads are always
+    flagged: nothing legitimate needs to fetch executable code without TLS."""
+    out = []
+    for m in _HTTP_SCRIPT_DL.finditer(text):
+        line = text.count("\n", 0, m.start()) + 1
+        out.append(f"Line {line}: downloads a script over unencrypted HTTP ('{m.group(0)[:90]}') - "
+                   f"executable code fetched without TLS can be swapped in transit")
+    for m in _DL_TO_FILE.finditer(text):
+        line_start = text.rfind("\n", 0, m.start()) + 1
+        line_end = text.find("\n", m.end())
+        full_line = text[line_start:line_end if line_end != -1 else len(text)]
+        if _TRUSTED_CODE_HOST.search(full_line) or _HTTP_SCRIPT_DL.search(full_line):
+            continue
+        name = re.escape(os.path.basename(m.group(1)))
+        after = text[m.end():]
+        # The interpreter must be its own word: a real bug in the first
+        # draft read the "sh" of "script.sh" as the sh shell and flagged a
+        # benign "download, review, then run" security tip.
+        if re.search(rf"(?:^|(?<=[\s;&|`(]))(?:python3?|bash|sh|node|pwsh|powershell|perl|ruby|source)\s+[^\n]*{name}|chmod\s+\+x\s+[^\n]*{name}", after, re.MULTILINE):
+            line = text.count("\n", 0, m.start()) + 1
+            out.append(f"Line {line}: downloads '{m.group(1)}' and later executes it - "
+                       f"two-step download-and-run of remote code")
+    return out
+
+
+_RC_PERSIST = re.compile(
+    r"""(?:echo|printf|cat)\b[^\n]{0,200}\b(?:PIP_INDEX_URL|PIP_EXTRA_INDEX_URL|NPM_CONFIG_REGISTRY|LD_PRELOAD|PROMPT_COMMAND|alias\s+(?:sudo|ssh|git|ls)=|curl\s|wget\s|nc\s|/dev/tcp)"""
+    r"""[^\n]{0,200}(?:>>|tee\s+-a)\s*["']?(?:\$HOME|~|\$\{HOME\})/\.(?:bashrc|zshrc|profile|bash_profile|zprofile|zshenv)\b""",
+    re.IGNORECASE,
+)
+
+
+def find_shell_startup_persistence(text):
+    """Appending a known persistence payload (a package-index redirect,
+    LD_PRELOAD, a hijacked alias, or a network command) to a shell
+    startup file. Appending ordinary exports (PATH, editor settings) is
+    common in legitimate setup docs and deliberately does not fire - a
+    broader version flagged 12 benign skills in dev testing."""
+    out = []
+    for m in _RC_PERSIST.finditer(text):
+        line = text.count("\n", 0, m.start()) + 1
+        out.append(f"Line {line}: writes a persistence payload into a shell startup file - "
+                   f"it would silently affect every future shell session")
+    return out
+
+
 def scan_skill_file(path):
     try:
         with open(path, encoding="utf-8", errors="replace") as f:
@@ -2791,6 +2929,14 @@ def scan_skill_file(path):
     # Check 38: an endpoint pointing at a known tunneling-service
     # domain - same source
     findings.extend(find_tunnel_service_endpoint(text))
+
+    # Checks 39-43 (v1.1.1) - see their definitions for the measured
+    # gain/cost of each on the dev split
+    findings.extend(find_covert_trigger_execution(text))
+    findings.extend(find_instruction_supersede(text))
+    findings.extend(find_role_hijack(text))
+    findings.extend(find_download_then_execute(text))
+    findings.extend(find_shell_startup_persistence(text))
 
     if findings:
         hard_findings = [f for f in findings if not f.startswith(SOFT_FINDING_MARKER)]

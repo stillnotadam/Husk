@@ -36,15 +36,19 @@ verification is real, separate work per marketplace, not glossed over
 here.
 """
 
+import io
 import json
 import os
-import subprocess
+import shutil
+import tarfile
 import tempfile
 import urllib.error
 import urllib.parse
 import urllib.request
+import zipfile
 from typing import Callable, Optional
 
+from .package_scanner import scan_package
 from .skill_scanner import scan_skill_file
 
 # marketplace name -> resolver function (skill_ref -> local content path
@@ -74,113 +78,250 @@ def register_marketplace(name):
 EXTERNAL_SOURCES: dict[str, Callable[[str], Optional[dict]]] = {}
 
 
-def register_external_source(name):
+# Which marketplaces each external source applies to (None = all). A
+# marketplace's own audit (e.g. ClawHub's) must only be consulted for
+# skills that actually came from that marketplace.
+_SOURCE_SCOPE: dict[str, Optional[set]] = {}
+
+
+def register_external_source(name, marketplaces=None):
     """Decorator: adds a fetch function to EXTERNAL_SOURCES under
     `name`, so aggregate_skill_opinions can call every registered
-    source uniformly without hardcoding the list in two places."""
+    source uniformly without hardcoding the list in two places.
+    `marketplaces` optionally restricts the source to those marketplaces."""
     def _decorator(fn):
         EXTERNAL_SOURCES[name] = fn
+        _SOURCE_SCOPE[name] = set(marketplaces) if marketplaces else None
         return fn
     return _decorator
 
 
-@register_marketplace("clawhub")
-def resolve_clawhub_skill(skill_ref, workdir=None):
-    """
-    Downloads a skill's real content from ClawHub, using ClawHub's own
-    official CLI (`npx clawhub install <skill>`) - confirmed real and
-    current directly, not guessed at: installed and ran it live,
-    confirmed the exact command shape via its own --help output. This
-    is the sanctioned, documented way to fetch a skill's content, not
-    a scraper built against internal API responses that were only
-    manually inspected a few times.
+# ---------------------------------------------------------------------
+# ClawHub - built on ClawHub's documented public REST API
+# (docs.openclaw.ai/clawhub/http-api). Public read endpoints need no
+# token and are explicitly allowed for third-party tools, provided
+# results are cached/rate-limit-aware and link back to the canonical
+# ClawHub page. The previous version shelled out to `npx clawhub`,
+# which (a) called a CLI command that does not return stored verdicts
+# and (b) depended on Node.js being present on the server - it failed
+# in production. Plain HTTPS has neither problem.
+# ---------------------------------------------------------------------
 
-    Honest, stated limitation: the actual network call to clawhub.ai
-    could not be completed FROM THIS DEVELOPMENT SANDBOX specifically -
-    its network policy allows npm's own registry (so the CLI itself
-    installs and runs) but blocks clawhub.ai directly. That is a
-    constraint of this one environment, not of the mechanism itself or
-    of a real deployment - confirmed by getting all the way to a live
-    "Host not in allowlist" response from the real CLI, not a made-up
-    limitation. Returns the local directory the skill was installed
-    into, or None if the install fails for any reason (network,
-    missing skill, no Node/npm available) - never raises.
+CLAWHUB_API = "https://clawhub.ai"
+_HTTP_TIMEOUT_SECONDS = 20
+_USER_AGENT = "husk-scanner (+https://github.com/ctrl-adam/Husk)"
+_MAX_ARCHIVE_BYTES = 10 * 1024 * 1024     # ClawHub's own raw download cap
+_MAX_EXTRACTED_BYTES = 50 * 1024 * 1024   # zip-bomb guard
+
+
+def parse_clawhub_ref(skill_ref):
+    """Accepts 'slug', 'owner/slug', '@owner/slug', 'owner/skills/slug'
+    or a clawhub.ai URL. Returns (owner_or_None, slug)."""
+    ref = (skill_ref or "").strip()
+    if ref.startswith(("http://", "https://")):
+        ref = urllib.parse.urlparse(ref).path
+    parts = [x for x in ref.strip("/").split("/") if x]
+    if not parts:
+        return None, ""
+    if len(parts) == 1:
+        return None, parts[0].lstrip("@")
+    owner = parts[0].lstrip("@").lower() or None
+    return owner, parts[-1]
+
+
+def clawhub_skill_url(owner, slug):
+    """Canonical ClawHub page (their terms ask third parties to link back)."""
+    if owner:
+        return f"{CLAWHUB_API}/{owner}/skills/{slug}"
+    return f"{CLAWHUB_API}/search?q={urllib.parse.quote(slug)}"
+
+
+def _http(method, url, body=None):
+    data = json.dumps(body).encode("utf-8") if body is not None else None
+    headers = {"User-Agent": _USER_AGENT, "Accept": "application/json, */*"}
+    if data is not None:
+        headers["Content-Type"] = "application/json"
+    req = urllib.request.Request(url, data=data, headers=headers, method=method)  # noqa: S310 - fixed https base URL
+    with urllib.request.urlopen(req, timeout=_HTTP_TIMEOUT_SECONDS) as resp:  # noqa: S310
+        payload = resp.read(_MAX_ARCHIVE_BYTES + 1)
+        if len(payload) > _MAX_ARCHIVE_BYTES:
+            raise ValueError("response larger than the 10MB limit")
+        return resp.headers.get("Content-Type", ""), payload
+
+
+def _describe_error(exc, slug):
+    """Turn a failure into a message a user can act on."""
+    if isinstance(exc, urllib.error.HTTPError):
+        try:
+            detail = exc.read().decode("utf-8", "replace").strip()[:200]
+        except Exception:
+            detail = ""
+        if exc.code == 404:
+            return f"ClawHub has no public skill '{slug}' (404). Check the name - try 'owner/skill-name' as shown on clawhub.ai."
+        if exc.code == 429:
+            return "ClawHub rate limit reached - try again in a minute."
+        if exc.code in (403, 410):
+            return f"ClawHub refused the download ({exc.code}): {detail or 'blocked or removed version'}."
+        return f"ClawHub returned HTTP {exc.code}: {detail}"
+    if isinstance(exc, urllib.error.URLError):
+        return f"Could not reach ClawHub ({exc.reason})."
+    return f"{type(exc).__name__}: {exc}"
+
+
+def _inside(base, target):
+    base = os.path.realpath(base)
+    target = os.path.realpath(target)
+    return os.path.commonpath([base, target]) == base
+
+
+def _safe_extract(archive_bytes, dest):
+    """Extract a zip or tar archive into dest, refusing path traversal,
+    links and oversized content. Archive contents are untrusted input."""
+    total = 0
+    if archive_bytes[:2] == b"PK":
+        with zipfile.ZipFile(io.BytesIO(archive_bytes)) as zf:
+            for info in zf.infolist():
+                if info.is_dir():
+                    continue
+                target = os.path.join(dest, info.filename)
+                if not _inside(dest, target):
+                    continue
+                total += info.file_size
+                if total > _MAX_EXTRACTED_BYTES:
+                    raise ValueError("archive expands beyond the 50MB safety limit")
+                os.makedirs(os.path.dirname(target), exist_ok=True)
+                with zf.open(info) as src, open(target, "wb") as out:
+                    shutil.copyfileobj(src, out)
+        return
+    with tarfile.open(fileobj=io.BytesIO(archive_bytes), mode="r:*") as tf:
+        for member in tf.getmembers():
+            if not member.isfile():
+                continue  # skips dirs, symlinks, hardlinks, devices
+            target = os.path.join(dest, member.name)
+            if not _inside(dest, target):
+                continue
+            total += member.size
+            if total > _MAX_EXTRACTED_BYTES:
+                raise ValueError("archive expands beyond the 50MB safety limit")
+            os.makedirs(os.path.dirname(target), exist_ok=True)
+            src = tf.extractfile(member)
+            if src is None:
+                continue
+            with src, open(target, "wb") as out:
+                shutil.copyfileobj(src, out)
+
+
+def _find_skill_root(extracted, hint_path=""):
+    """Locate the directory holding the skill inside an extracted archive."""
+    hint = hint_path.strip("/")
+    for root, _dirs, files in os.walk(extracted):
+        rel = os.path.relpath(root, extracted).replace(os.sep, "/")
+        if hint and not (rel == hint or rel.endswith("/" + hint)):
+            continue
+        if "SKILL.md" in files or hint:
+            return root
+    for root, _dirs, files in os.walk(extracted):
+        if "SKILL.md" in files:
+            return root
+    return extracted if os.listdir(extracted) else None
+
+
+def fetch_clawhub_skill(skill_ref, workdir=None):
+    """Download a public ClawHub skill's real files. Returns
+    (directory_or_None, error_message_or_None). Never raises.
+
+    Uses GET /api/v1/download?slug=..., which returns the hosted skill
+    as a ZIP, or - for GitHub-backed skills - a JSON handoff pointing at
+    the public GitHub archive, which is then fetched instead.
     """
+    _owner, slug = parse_clawhub_ref(skill_ref)
+    if not slug:
+        return None, "Enter a ClawHub skill name, e.g. 'owner/skill-name'."
     workdir = workdir or tempfile.mkdtemp(prefix="husk_clawhub_")
     try:
-        result = subprocess.run(  # noqa: S603 - list args, no shell=True, no injection risk
-            # npx resolved from PATH deliberately for portability across
-            # dev machines and CI alike, not a hardcoded absolute path
-            ["npx", "clawhub@latest", "install", skill_ref, "--workdir", workdir, "--force"],  # noqa: S607
-            capture_output=True, text=True, timeout=60, check=False,
-        )
-        if result.returncode != 0:
-            return None
-        skills_dir = os.path.join(workdir, "skills")
-        if not os.path.isdir(skills_dir):
-            return None
-        # The installed skill lands in a subdirectory of skills_dir -
-        # find the one actually containing a SKILL.md.
-        for entry in os.listdir(skills_dir):
-            candidate = os.path.join(skills_dir, entry)
-            if os.path.isfile(os.path.join(candidate, "SKILL.md")):
-                return candidate
-        return None
-    except (subprocess.TimeoutExpired, FileNotFoundError, OSError):
-        return None
+        url = f"{CLAWHUB_API}/api/v1/download?slug={urllib.parse.quote(slug)}"
+        ctype, payload = _http("GET", url)
+        hint = ""
+        if "json" in ctype or payload[:1] == b"{":
+            handoff = json.loads(payload.decode("utf-8"))
+            archive_url = handoff.get("archiveUrl")
+            if not archive_url or not archive_url.startswith("https://"):
+                return None, "ClawHub returned a GitHub handoff without a usable archive URL."
+            hint = handoff.get("path") or ""
+            _ctype, payload = _http("GET", archive_url)
+        _safe_extract(payload, workdir)
+        root = _find_skill_root(workdir, hint)
+        if not root:
+            return None, "The downloaded archive was empty."
+        return root, None
+    except Exception as exc:  # network, HTTP, archive, JSON - all reported, never raised
+        return None, _describe_error(exc, slug)
 
 
-@register_external_source("socket")
-def _fetch_socket_opinion(skill_ref):
-    """
-    TODO, real and stated, not hidden: Socket's per-skill audit pages
-    were confirmed to exist and to carry real findings (verdict,
-    confidence, severity) during this project's own research, but
-    reliably fetching and parsing them programmatically - respecting
-    Socket's own terms of use, and not breaking silently the moment
-    their page layout changes - is real, separate work that hasn't
-    been built and verified yet. Returns None (source unavailable)
-    until that's actually done, which aggregate_skill_opinions already
-    treats as a normal, expected condition, not an error.
-    """
-    return None
+def resolve_clawhub_skill(skill_ref, workdir=None):
+    """Path-only convenience wrapper around fetch_clawhub_skill."""
+    path, _error = fetch_clawhub_skill(skill_ref, workdir)
+    return path
 
 
-@register_external_source("clawhub_native")
+@register_marketplace("clawhub")
+def _resolve_clawhub_for_aggregate(skill_ref, workdir=None):
+    return fetch_clawhub_skill(skill_ref, workdir)
+
+
+@register_external_source("clawhub_native", marketplaces=["clawhub"])
 def _fetch_clawhub_native_audit(skill_ref):
-    """
-    ClawHub's own built-in audit (Pass/Review/Warn/Malicious,
-    confirmed real via their own published docs), fetched through
-    their own official CLI: `npx clawhub scan --slug <skill> --json` -
-    confirmed to be a real, documented command via the CLI's own
-    --help output, not guessed at.
+    """ClawHub's own published security verdict for the latest version.
 
-    Same honest, stated limitation as resolve_clawhub_skill above:
-    verified the CLI and the exact command shape are real; could not
-    complete a live call from this specific sandbox, since its network
-    policy blocks clawhub.ai directly even though npm's own registry
-    (needed to install the CLI itself) is allowed. Returns None on any
-    failure - never raises.
-    """
+    Primary: POST /api/v1/skills/-/security-verdicts (compact verdicts).
+    Fallback: the `moderation.verdict` field of GET /api/v1/skills/{slug},
+    whose real shape was confirmed from a live curl output posted in
+    openclaw/openclaw issue #92077 (June 2026). The fallback means one
+    endpoint changing or failing does not blank out ClawHub's verdict."""
+    owner, slug = parse_clawhub_ref(skill_ref)
+    if not slug:
+        return {"available": False, "error": "no skill name given"}
     try:
-        result = subprocess.run(  # noqa: S603 - same reasoning as resolve_clawhub_skill above
-            ["npx", "clawhub@latest", "scan", "--slug", skill_ref, "--json"],  # noqa: S607
-            capture_output=True, text=True, timeout=60, check=False,
-        )
-        if result.returncode != 0 or not result.stdout.strip():
-            return None
-        data = json.loads(result.stdout)
-        # Real ClawHub audit statuses, per their own published docs:
-        # Pass/Review/Warn/Malicious/Pending/Error.
-        status = data.get("status") or data.get("auditStatus")
-        return {
-            "available": status is not None,
-            "flagged": status in ("Warn", "Malicious"),
-            "verdict": status,
-            "raw": data,
-        }
-    except (subprocess.TimeoutExpired, FileNotFoundError, OSError, json.JSONDecodeError):
-        return None
+        _ct, raw = _http("GET", f"{CLAWHUB_API}/api/v1/skills/{urllib.parse.quote(slug)}")
+        detail = json.loads(raw.decode("utf-8"))
+    except Exception as exc:
+        return {"available": False, "error": _describe_error(exc, slug)}
+
+    version = (detail.get("latestVersion") or {}).get("version")
+    owner = owner or ((detail.get("owner") or {}).get("handle") or "").lower() or None
+    skill_url = clawhub_skill_url(owner, slug)
+    moderation_verdict = (detail.get("moderation") or {}).get("verdict")
+
+    def _result(status, source, **extra):
+        return {"available": True, "flagged": status in ("suspicious", "malicious"),
+                "verdict": status, "version": version, "skill_url": skill_url,
+                "verdict_source": source, **extra}
+
+    primary_error = None
+    if version:
+        try:
+            item_req = {"slug": slug, "version": version}
+            if owner:
+                item_req["ownerHandle"] = owner
+            _ct, raw = _http("POST", f"{CLAWHUB_API}/api/v1/skills/-/security-verdicts", {"items": [item_req]})
+            items = json.loads(raw.decode("utf-8")).get("items") or []
+            item = items[0] if items else {}
+            status = (item.get("security") or {}).get("status")
+            if status in ("clean", "suspicious", "malicious"):
+                return _result(status, "security-verdicts",
+                               decision=item.get("decision"),
+                               audit_url=item.get("securityAuditUrl"),
+                               overview=item.get("overview"),
+                               skill_url=item.get("skillUrl") or skill_url)
+            primary_error = (item.get("error") or {}).get("message") or f"no definitive verdict (status: {status})"
+        except Exception as exc:
+            primary_error = _describe_error(exc, slug)
+    else:
+        primary_error = "skill has no public version on ClawHub"
+
+    if moderation_verdict in ("clean", "suspicious", "malicious"):
+        return _result(moderation_verdict, "moderation")
+    return {"available": False, "error": primary_error}
 
 
 @register_marketplace("skillssh")
@@ -318,16 +459,25 @@ def aggregate_skill_opinions(skill_ref, marketplace="clawhub", local_path=None,
     shape invented just for this.
     """
     opinions = {}
+    resolve_error = None
+    scan_target = local_path
 
-    if not local_path and auto_fetch:
+    if not scan_target and auto_fetch:
         resolver = MARKETPLACE_RESOLVERS.get(marketplace)
-        resolved_dir = resolver(skill_ref) if resolver else None
-        if resolved_dir:
-            local_path = os.path.join(resolved_dir, "SKILL.md")
+        if resolver is None:
+            resolve_error = f"Unknown marketplace '{marketplace}'."
+        else:
+            out = resolver(skill_ref)
+            # Resolvers may return a path, or (path, error) to explain failures.
+            scan_target, resolve_error = out if isinstance(out, tuple) else (out, None)
 
-    if local_path and os.path.exists(local_path):
+    if scan_target and os.path.exists(scan_target):
         try:
-            result = scan_skill_file(local_path)
+            if os.path.isdir(scan_target):
+                findings = scan_package(scan_target)
+                result = {"verdict": "FLAGGED" if findings else "SAFE", "findings": findings}
+            else:
+                result = scan_skill_file(scan_target)
             opinions["husk"] = {
                 "available": True,
                 "flagged": result["verdict"] == "FLAGGED",
@@ -339,26 +489,27 @@ def aggregate_skill_opinions(skill_ref, marketplace="clawhub", local_path=None,
     else:
         opinions["husk"] = {
             "available": False,
-            "error": f"No local copy of this skill's content was provided, "
-                     f"and auto-fetching it from '{marketplace}' did not "
-                     f"succeed - Husk's own scan did not run. Pass local_path "
-                     f"directly if you already have the content.",
+            "error": resolve_error or (
+                f"Could not get this skill's content from '{marketplace}', so Husk's "
+                f"own scan did not run. Pass local_path directly if you already have it."
+            ),
         }
 
-    if auto_fetch:
-        for source_name, fetch_fn in EXTERNAL_SOURCES.items():
-            external = fetch_fn(skill_ref)
-            opinions[source_name] = external if external is not None else {
-                "available": False,
-                "error": f"{source_name} adapter not yet built/verified - see this "
-                         f"module's docstring.",
-            }
-    else:
-        for source_name in EXTERNAL_SOURCES:
+    for source_name, fetch_fn in EXTERNAL_SOURCES.items():
+        scope = _SOURCE_SCOPE.get(source_name)
+        if scope is not None and marketplace not in scope:
+            continue
+        if not auto_fetch:
             opinions[source_name] = {
                 "available": False,
                 "error": "auto_fetch=False - no live external calls were made.",
             }
+            continue
+        external = fetch_fn(skill_ref)
+        opinions[source_name] = external if external is not None else {
+            "available": False,
+            "error": f"{source_name} returned no result.",
+        }
 
     if external_results:
         for source_name, result in external_results.items():
@@ -381,9 +532,16 @@ def aggregate_skill_opinions(skill_ref, marketplace="clawhub", local_path=None,
     else:
         agreement = "split"
 
+    source_url = None
+    if marketplace == "clawhub":
+        native = opinions.get("clawhub_native") or {}
+        owner, slug = parse_clawhub_ref(skill_ref)
+        source_url = native.get("skill_url") or (clawhub_skill_url(owner, slug) if slug else None)
+
     return {
         "skill": skill_ref,
         "marketplace": marketplace,
+        "source_url": source_url,
         "opinions": opinions,
         "summary": {
             "total_sources": total_available,

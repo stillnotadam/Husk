@@ -195,6 +195,8 @@ def cmd_aggregate(args):
     result = aggregate_skill_opinions(args.skill_ref, marketplace=args.marketplace, local_path=args.local)
 
     print(f"\nAggregate opinion for: {args.skill_ref} (marketplace: {result['marketplace']})")
+    if result.get("source_url"):
+        print(f"  Listing: {result['source_url']}")
     for source, opinion in result["opinions"].items():
         if opinion.get("available"):
             flag_word = "FLAGGED" if opinion.get("flagged") else "clear"
@@ -312,10 +314,10 @@ def main():
     p_model.set_defaults(func=cmd_model)
 
     p_aggregate = subparsers.add_parser(
-        "aggregate", help="Combine Husk's own verdict with other independent "
-                          "auditors' published opinions on an already-listed "
-                          "skill (early: most external sources aren't wired up "
-                          "yet, see src/husk/aggregator.py)",
+        "aggregate", help="Download a published skill (e.g. owner/skill-name "
+                          "on ClawHub), scan the whole package with Husk, and "
+                          "compare against the marketplace's own security "
+                          "verdict where one is published",
     )
     p_aggregate.add_argument("skill_ref", help="The skill's identifier (e.g. owner/skill-name)")
     p_aggregate.add_argument(

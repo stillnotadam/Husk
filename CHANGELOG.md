@@ -4,6 +4,36 @@ All notable changes to Husk are documented here. Format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.0.0/); versioning
 follows [Semantic Versioning](https://semver.org/).
 
+## [1.1.1] - 2026-09-24
+
+### Fixed
+- `husk` crashed on launch on Windows: the Unix-only `resource` module was
+  imported unconditionally. The dynamic sandbox (Linux-only by design) now
+  reports "requires Linux" elsewhere; the static scanner works everywhere.
+- ClawHub lookups never worked in production. The integration shelled out
+  to `npx clawhub` with a command that does not return stored verdicts, and
+  depended on Node.js being installed. Rebuilt on ClawHub's documented public
+  REST API (`/api/v1/download`, `/api/v1/skills/{slug}`,
+  `/api/v1/skills/-/security-verdicts`). No Node.js required.
+
+### Detection
+- Five new checks from a held-out re-benchmark (see BENCHMARK.md, "v1.1.1"):
+  covert trigger -> script execution, instruction-supersede overrides, role
+  hijack, download-then-execute / plain-HTTP script downloads, and targeted
+  shell-startup persistence.
+- Recall: MalSkillBench 63.9% -> 64.6%, ASB 61.9% -> 63.5% (held-out halves
+  63.7% / 63.8%), with no new false positives on the 4,000 benign or 249
+  curated skills.
+
+### Changed
+- `husk aggregate` now scans the whole downloaded package, not only
+  `SKILL.md`, so malicious code in bundled scripts is caught.
+- Lookup failures now explain themselves (unknown skill, rate limit,
+  unreachable) instead of a generic "did not succeed".
+- Results link back to the canonical ClawHub listing, as ClawHub's API terms ask.
+- Accepts `slug`, `owner/slug`, `@owner/slug` or a clawhub.ai URL.
+- The unbuilt Socket adapter is no longer shown as a checked source.
+
 ## [1.1.0] - 2026-09-23
 
 ### Added
