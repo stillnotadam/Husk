@@ -9,10 +9,10 @@ competitor comparison, every bug found and fixed along the way).
 
 | | Result |
 |---|---|
-| **MalSkillBench** recall (3,945 real malicious samples, full dataset) | **64.6% (2,548/3,945)** - held-out half: 63.7% |
-| **ASB-derived** recall (7,280 real malicious samples) | **63.5% (4,623/7,280)** - held-out official test split: 63.8% |
+| **MalSkillBench** recall (3,945 real malicious samples, full dataset) | **64.2% (2,533/3,945)** - held-out half: 63.3% |
+| **ASB-derived** recall (7,280 real malicious samples) | **63.3% (4,608/7,280)** - held-out official test split: 63.5% |
 | False positives, curated real-skill baseline (249 samples) | **246/249 (98.8%) clean** |
-| False positives, MalSkillBench benign set (4,000 samples, full dataset) | **90.7% (3,627/4,000) clean** |
+| False positives, MalSkillBench benign set (4,000 samples, full dataset) | **90.8% (3,634/4,000) clean** |
 | Validation against an independent labeled corpus (cisco-ai-defense/skill-scanner, 27 fixtures) | **13/16 malicious caught, 0 false positives on 11 safe** |
 
 (v1.1.1 re-run from scratch on all 15,474 samples - see "v1.1.1: held-out
@@ -1604,3 +1604,39 @@ distinctive wording, which static rules cannot reliably catch without
 false positives; that gap is what the optional `--llm-review` layer is for.
 The Cisco skill-scanner corpus comparison (13/16, 0 false positives) was
 not re-run for 1.1.1.
+
+
+---
+
+# v1.1.2: first live ClawHub benchmark, and what it changed
+
+`benchmarks/clawhub_benchmark.py` ran Husk on 452 real, public ClawHub skills
+and compared against ClawHub's own published verdicts. It found three real
+problems, all fixed in 1.1.2:
+
+- **A crash:** a file containing null bytes aborted the whole package scan.
+- **105 failed downloads:** slugs shared by several publishers need
+  `ownerHandle`, which ClawHub enforces with a 409 (so no wrong skill was
+  ever scanned).
+- **A false-positive cluster:** "unusually long hidden comment" fired on
+  about 10% of the clean ClawHub skills sampled (27 of 45 Husk-only flags),
+  mostly shared metadata comments. It is now an INFO note unless the comment
+  is written at the agent (alarm tags, role assignment, fake configuration
+  headers, execute/reveal/override language).
+
+The measured cost of that last fix, on the same held-out splits as v1.1.1:
+
+| | 1.1.1 | 1.1.2 |
+|---|---|---|
+| MalSkillBench recall | 64.6% | **64.2%** (held-out 63.3%) |
+| ASB recall | 63.5% | **63.3%** (held-out 63.5%) |
+| MalSkillBench benign, clean | 90.7% | **90.8%** |
+| Curated real skills, clean | 98.8% | **98.8%** |
+
+About 0.3 recall points were traded for removing a flag that hit roughly one
+in ten real clean skills - a deliberate choice: benchmark benign sets
+under-represent real-world metadata comments.
+
+The full ClawHub comparison will be published once re-run on 1.1.2. Note that
+ClawHub's "suspicious" often reflects risk hygiene (unpinned installers, broad
+triggers) rather than malice, so agreement rates must be read with that in mind.

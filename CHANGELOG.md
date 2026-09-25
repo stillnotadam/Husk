@@ -4,6 +4,24 @@ All notable changes to Husk are documented here. Format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.0.0/); versioning
 follows [Semantic Versioning](https://semver.org/).
 
+## [1.1.2] - 2026-09-25
+
+Found by running Husk against 452 real ClawHub skills (benchmarks/clawhub_benchmark.py).
+
+### Fixed
+- A file containing null bytes crashed the whole package scan.
+- ClawHub lookups failed for skills whose name is shared by several publishers
+  (HTTP 409); Husk now passes the owner, and explains the error when none is given.
+
+### Changed
+- "Unusually long hidden comment" is now an INFO note unless the comment is
+  directed at the agent. It flagged ~10% of real clean ClawHub skills.
+  Recall: MalSkillBench 64.6% -> 64.2%, ASB 63.5% -> 63.3%; benign clean 90.7% -> 90.8%.
+
+### Added
+- `benchmarks/clawhub_benchmark.py`: compares Husk with ClawHub's published
+  verdicts on real skills (public API only, rate-limit aware, resumable).
+
 ## [1.1.1] - 2026-09-24
 
 ### Fixed

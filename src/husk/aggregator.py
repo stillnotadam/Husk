@@ -158,6 +158,9 @@ def _describe_error(exc, slug):
             detail = ""
         if exc.code == 404:
             return f"ClawHub has no public skill '{slug}' (404). Check the name - try 'owner/skill-name' as shown on clawhub.ai."
+        if exc.code == 409:
+            return (f"'{slug}' is used by several ClawHub publishers - include the owner, "
+                    f"e.g. 'owner/{slug}' as shown on clawhub.ai.")
         if exc.code == 429:
             return "ClawHub rate limit reached - try again in a minute."
         if exc.code in (403, 410):
@@ -234,12 +237,16 @@ def fetch_clawhub_skill(skill_ref, workdir=None):
     as a ZIP, or - for GitHub-backed skills - a JSON handoff pointing at
     the public GitHub archive, which is then fetched instead.
     """
-    _owner, slug = parse_clawhub_ref(skill_ref)
+    owner, slug = parse_clawhub_ref(skill_ref)
     if not slug:
         return None, "Enter a ClawHub skill name, e.g. 'owner/skill-name'."
     workdir = workdir or tempfile.mkdtemp(prefix="husk_clawhub_")
     try:
-        url = f"{CLAWHUB_API}/api/v1/download?slug={urllib.parse.quote(slug)}"
+        # Slugs are not unique across publishers: without ownerHandle,
+        # ClawHub answers 409 "Ambiguous skill slug" (found on ~1 in 4
+        # popular skills in the live benchmark).
+        query = {"slug": slug, **({"ownerHandle": owner} if owner else {})}
+        url = f"{CLAWHUB_API}/api/v1/download?{urllib.parse.urlencode(query)}"
         ctype, payload = _http("GET", url)
         hint = ""
         if "json" in ctype or payload[:1] == b"{":

@@ -416,7 +416,9 @@ class _FakeClawHub:
             def do_GET(self):
                 outer.requests.append(("GET", self.path))
                 if self.path.startswith("/api/v1/download?slug="):
-                    slug = self.path.split("=", 1)[1]
+                    slug = self.path.split("=", 1)[1].split("&", 1)[0]
+                    if "&ownerHandle=" not in self.path and slug == "shared-name":
+                        return self._send(409, b"Ambiguous skill slug", "text/plain; charset=utf-8")
                     sk = outer.skills.get(slug)
                     if not sk:
                         return self._send(404, b"Skill not found", "text/plain; charset=utf-8")
@@ -562,3 +564,19 @@ def test_clawhub_verdict_falls_back_to_moderation_field_when_verdicts_endpoint_f
 def test_clawhub_verdict_prefers_security_verdicts_endpoint(fake_clawhub):
     native = aggregate_skill_opinions("alice/nice-skill", marketplace="clawhub")["opinions"]["clawhub_native"]
     assert native["verdict_source"] == "security-verdicts"
+
+
+def test_download_passes_owner_so_ambiguous_slugs_resolve(fake_clawhub):
+    fake_clawhub.skills["shared-name"] = {"owner": "dana", "version": "1.0.0", "status": "clean",
+                                          "files": {"SKILL.md": "---\nname: s\n---\nHi.\n"}}
+    result = aggregate_skill_opinions("dana/shared-name", marketplace="clawhub")
+    assert result["opinions"]["husk"]["available"] is True
+    get = [r for r in fake_clawhub.requests if r[0] == "GET" and "download" in r[1]][-1]
+    assert "ownerHandle=dana" in get[1]
+
+
+def test_ambiguous_slug_without_owner_explains_itself(fake_clawhub):
+    fake_clawhub.skills["shared-name"] = {"owner": "dana", "version": "1.0.0", "status": "clean",
+                                          "files": {"SKILL.md": "x"}}
+    err = aggregate_skill_opinions("shared-name", marketplace="clawhub")["opinions"]["husk"]["error"]
+    assert "several ClawHub publishers" in err

@@ -311,7 +311,11 @@ def _analyze_taint_flows_once(source_code, filename, seed_tainted_returning):
         with warnings.catch_warnings():
             warnings.simplefilter("ignore")
             tree = ast.parse(source_code, filename=filename)
-    except SyntaxError:
+    except (SyntaxError, ValueError, RecursionError, MemoryError):
+        # ValueError: source containing null bytes (found on a real ClawHub
+        # skill - it crashed the whole package scan). RecursionError /
+        # MemoryError: pathologically nested or huge input. Taint analysis
+        # is skipped for that file; every other check still runs on it.
         return [], {}
 
     findings = []

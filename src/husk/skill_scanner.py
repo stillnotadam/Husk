@@ -201,6 +201,26 @@ SUSPICIOUS_PHRASES = [
 # existing hooks, not new ones built for this.
 SOFT_FINDING_MARKER = "\u25b8SOFT\u25b8"
 
+# Language that addresses an AI agent rather than a human reader; used to
+# decide whether a long hidden comment is a hard flag or an INFO note.
+_AGENT_DIRECTED_COMMENT = re.compile(
+    r"\[[A-Z0-9][A-Z0-9 _-]{4,}\]"
+    r"|\b(?:CRITICAL|MANDATORY|IMPORTANT|URGENT|WARNING|SYSTEM|OVERRIDE|DIRECTIVE|INJECTION)\b"
+    r"|(?i:\b(?:operational directive|system[- ]prompt|initial (?:prompt|instructions|configuration)"
+    r"|act as|you are (?:an?|now|the)|take on the (?:identity|role)|imagine you are|pretend"
+    r"|the (?:agent|assistant|ai|model|system) (?:shall|must|should|will)"
+    r"|execute|download|install|run the|reveal|disclose|override|bypass|disregard|ignore|forget"
+    r"|unrestricted|without (?:applying|any) (?:filters|restrictions)|exfiltrat|send (?:it|this|them|all) to)\b)"
+    # Fake configuration headers ("SKILL RUNTIME PARAMETERS:", "RUNTIME
+    # IDENTITY PROTOCOL:") and role/behaviour assignment in second person -
+    # the shapes of the samples the first version of this regex missed.
+    r"|\b[A-Z][A-Z_]{2,}(?:[ _][A-Z_]{2,})+\s*:"
+    r"|(?i:\b(?:you (?:must|shall|will|deliver|should|are to)|in your role|assumes? the (?:identity|role)"
+    r"|when engaged|content (?:boundaries|restrictions)|(?:suspended|relaxed|lifted) (?:\w+ )?(?:restrictions|boundaries|filters)"
+    r"|if the user (?:asks|says|mentions|requests)|operational (?:guidance|profile|framework|mode)"
+    r"|runtime (?:identity|configuration|parameters|mode))\b)"
+)
+
 SECRECY_SIGNALS = [
     "silently", "secretly", "quietly", "do not mention", "don't mention",
     "do not tell", "don't tell", "without telling", "without informing",
@@ -649,8 +669,16 @@ def find_hidden_instructions(text):
                 # unless it's clearly a standard license/copyright header,
                 # which is common, benign, and was a real false positive
                 # found via testing (NVIDIA/Apache SPDX headers).
+                # Hard flag only when the long comment is written AT the
+                # agent (alarm tags, "act as", "the agent shall", execute/
+                # download/reveal/override...). Plain long comments - format
+                # templates, metadata, checksums, notes for humans - become
+                # an INFO note. Found via the live ClawHub benchmark: a
+                # template publisher's metadata comments were 27 of Husk's
+                # 45 flags that ClawHub rated clean.
+                marker = "" if _AGENT_DIRECTED_COMMENT.search(comment_body) else SOFT_FINDING_MARKER
                 findings.append(
-                    f"Line {line_num}: unusually long hidden comment "
+                    f"{marker}Line {line_num}: unusually long hidden comment "
                     f"({len(comment_body.strip())} chars) - worth a manual look, "
                     f"since legitimate comments in skill files are normally short."
                 )

@@ -10,6 +10,7 @@ import os
 import sys
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "src"))
+from husk.package_scanner import scan_package  # noqa: E402
 from husk.taint_analysis import analyze_taint_flows  # noqa: E402
 
 
@@ -266,3 +267,16 @@ def main():
     findings = analyze_taint_flows(code)
     assert len(findings) >= 1  # documents the known false-positive shape, not a bug to "fix" here
 
+
+
+def test_null_bytes_do_not_crash_the_scan():
+    """Real crash found on a live ClawHub skill: ast.parse raises
+    ValueError (not SyntaxError) on null bytes, which aborted the whole
+    package scan."""
+    assert analyze_taint_flows("import os\x00\nos.system(x)\n") == []
+
+
+def test_package_with_null_byte_file_still_scans(tmp_path):
+    (tmp_path / "SKILL.md").write_text("---\nname: t\n---\nHello\n")
+    (tmp_path / "weird.py").write_bytes(b"import os\x00\nos.system(input())\n")
+    scan_package(str(tmp_path))  # must not raise

@@ -20,11 +20,11 @@ corner:
 
 | | Recall (real malicious) | Precision (real legitimate) |
 |---|---|---|
-| **Husk** | **63.5–64.6% (full datasets, 11,225 real samples)** | **98.8%** |
+| **Husk** | **63.3–64.2% (full datasets, 11,225 real samples)** | **98.8%** |
 | Best competitor at matched precision | ~57% | 81–94% |
 | Best competitor raw recall (loose mode, high false positives) | 92.5% | 22–59% |
 
-Snyk's own Agent Scan is excluded from the numeric comparison. its
+Snyk's own Agent Scan is excluded from the numeric comparison - its
 real analysis endpoint returns 403 even with a valid account token
 (documented in BENCHMARK.md), so no real detection number was
 obtainable, not because it performed worse.
@@ -292,7 +292,7 @@ exactly that.
 
 ## What v1 does NOT do yet
 
-- **Real-world recall is 63.5-64.6%, not 100%** (measured against 11,225 real confirmed-malicious samples across two independent datasets - see BENCHMARK.md for the full methodology). The main gap: **novel, semantically-disguised attacks with no code and no recognizable keywords** - a subtle instruction-blurring attack and a fake "compliance auditor" asking in plain prose for secrets, both missed by static analysis and saved openly in `tests/known_misses/` rather than hidden. This matches published research showing static pattern-matching tops out around 13-32% recall on novel/disguised attacks generally - not a Husk-specific flaw, but a real, honest limit of this entire approach. The optional `--llm-review` layer exists specifically for this gap.
+- **Real-world recall is 63.3-64.2%, not 100%** (measured against 11,225 real confirmed-malicious samples across two independent datasets - see BENCHMARK.md for the full methodology). The main gap: **novel, semantically-disguised attacks with no code and no recognizable keywords** - a subtle instruction-blurring attack and a fake "compliance auditor" asking in plain prose for secrets, both missed by static analysis and saved openly in `tests/known_misses/` rather than hidden. This matches published research showing static pattern-matching tops out around 13-32% recall on novel/disguised attacks generally - not a Husk-specific flaw, but a real, honest limit of this entire approach. The optional `--llm-review` layer exists specifically for this gap.
 - **Two structural limits no pre-execution scanner, static or LLM, can ever close**: Self-Mutating Poisoning (the malicious content doesn't exist in the file until the skill actually runs) and dynamically-generated payloads. Confirmed directly against real samples exhibiting both patterns.
 - Archive extraction currently unpacks ZIP; GZIP/7z/RAR are detected (a mismatched-extension archive still gets flagged) but not yet recursively unpacked
 - The AST taint tracker follows data flow within a file, including into a function through its parameters, but doesn't re-trace taint propagating deeper inside a callee's own body, and doesn't cross module/file boundaries
