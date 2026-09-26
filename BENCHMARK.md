@@ -9,10 +9,10 @@ competitor comparison, every bug found and fixed along the way).
 
 | | Result |
 |---|---|
-| **MalSkillBench** recall (3,945 real malicious samples, full dataset) | **64.2% (2,533/3,945)** - held-out half: 63.3% |
-| **ASB-derived** recall (7,280 real malicious samples) | **63.3% (4,608/7,280)** - held-out official test split: 63.5% |
+| **MalSkillBench** recall (3,945 real malicious samples, full dataset) | **63.9% (2,521/3,945)** - held-out half: 63.0% |
+| **ASB-derived** recall (7,280 real malicious samples) | **63.1% (4,593/7,280)** - held-out official test split: 63.5% |
 | False positives, curated real-skill baseline (249 samples) | **246/249 (98.8%) clean** |
-| False positives, MalSkillBench benign set (4,000 samples, full dataset) | **90.8% (3,634/4,000) clean** |
+| False positives, MalSkillBench benign set (4,000 samples, full dataset) | **92.2% (3,689/4,000) clean** |
 | Validation against an independent labeled corpus (cisco-ai-defense/skill-scanner, 27 fixtures) | **13/16 malicious caught, 0 false positives on 11 safe** |
 
 (v1.1.1 re-run from scratch on all 15,474 samples - see "v1.1.1: held-out
@@ -1640,3 +1640,33 @@ under-represent real-world metadata comments.
 The full ClawHub comparison will be published once re-run on 1.1.2. Note that
 ClawHub's "suspicious" often reflects risk hygiene (unpinned installers, broad
 triggers) rather than malice, so agreement rates must be read with that in mind.
+
+
+---
+
+# v1.1.3: second live ClawHub run (600 skills, 0 download errors)
+
+| | ClawHub clean | ClawHub suspicious |
+|---|---|---|
+| Husk SAFE | 311 | 201 |
+| Husk FLAGGED | 45 | 43 |
+
+When ClawHub rated a skill clean, Husk agreed 87% of the time (311/356). When
+ClawHub rated it suspicious, Husk flagged 18% (43/244) - expected, since
+ClawHub's "suspicious" is largely risk hygiene (unpinned installers, broad
+triggers, autonomy), which Husk deliberately does not treat as malicious.
+
+33 of Husk's 45 ClawHub-clean flags came from one rule: "file references a
+credential-file pattern" firing on long documentation that mentions `.env`
+far away from its HTTP examples. Measured on the benchmarks, when it was the
+sole reason for a flag and the match was in a .md/.txt file, it hit 90 benign
+skills vs 33 malicious. In documentation it is now an INFO note, unless a
+network-send call sits within 15 lines (code embedded in the document, the
+shape of `tests/credential_theft.md`), where it stays a hard flag.
+
+| | 1.1.2 | 1.1.3 |
+|---|---|---|
+| MalSkillBench recall | 64.2% | **63.9%** (held-out 63.0%) |
+| ASB recall | 63.3% | **63.1%** (held-out 63.5%) |
+| MalSkillBench benign, clean | 90.8% | **92.2%** (held-out 92.3%) |
+| Curated real skills, clean | 98.8% | **98.8%** |

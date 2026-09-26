@@ -276,6 +276,26 @@ def _resolve_clawhub_for_aggregate(skill_ref, workdir=None):
     return fetch_clawhub_skill(skill_ref, workdir)
 
 
+def _verdict_via_verify(owner, slug):
+    """For slugs shared by several publishers, /api/v1/skills/{slug} is
+    ambiguous (409). /verify accepts ownerHandle and returns the same
+    top-level security verdict (docs: security.status)."""
+    try:
+        q = urllib.parse.urlencode({"ownerHandle": owner})
+        _ct, raw = _http("GET", f"{CLAWHUB_API}/api/v1/skills/{urllib.parse.quote(slug)}/verify?{q}")
+        env = json.loads(raw.decode("utf-8"))
+    except Exception as exc:
+        return {"available": False, "error": _describe_error(exc, slug)}
+    status = (env.get("security") or {}).get("status")
+    if status not in ("clean", "suspicious", "malicious"):
+        return {"available": False, "error": f"no definitive ClawHub verdict yet (status: {status})"}
+    version = env.get("version")
+    audit = f"{clawhub_skill_url(owner, slug)}/security-audit" + (f"?version={version}" if version else "")
+    return {"available": True, "flagged": status in ("suspicious", "malicious"), "verdict": status,
+            "version": version, "decision": env.get("decision"), "skill_url": clawhub_skill_url(owner, slug),
+            "audit_url": audit, "verdict_source": "verify"}
+
+
 @register_external_source("clawhub_native", marketplaces=["clawhub"])
 def _fetch_clawhub_native_audit(skill_ref):
     """ClawHub's own published security verdict for the latest version.
@@ -291,6 +311,10 @@ def _fetch_clawhub_native_audit(skill_ref):
     try:
         _ct, raw = _http("GET", f"{CLAWHUB_API}/api/v1/skills/{urllib.parse.quote(slug)}")
         detail = json.loads(raw.decode("utf-8"))
+    except urllib.error.HTTPError as exc:
+        if exc.code == 409 and owner:
+            return _verdict_via_verify(owner, slug)
+        return {"available": False, "error": _describe_error(exc, slug)}
     except Exception as exc:
         return {"available": False, "error": _describe_error(exc, slug)}
 

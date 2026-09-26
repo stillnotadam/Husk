@@ -148,6 +148,9 @@ def main():
             row = {"owner": owner, "slug": slug, "version": s["latestVersion"]["version"],
                    "sampled_by": s["_sampled_by"], "clawhub": ch,
                    "clawhub_decision": item.get("decision"), "audit_url": item.get("securityAuditUrl"),
+                   "clawhub_reasons": item.get("reasons") or [],
+                   "clawhub_static_codes": (((item.get("security") or {}).get("signals") or {}).get("staticScan") or {}).get("reasonCodes") or [],
+                   "clawhub_overview": (item.get("overview") or "")[:400],
                    "husk": None if err else ("FLAGGED" if findings else "SAFE"),
                    "husk_error": err, "husk_findings": findings[:10],
                    "url": f"https://clawhub.ai/{owner}/skills/{slug}"}
@@ -193,6 +196,15 @@ def write_summary(res_path, md_path):
     kinds = collections.Counter(k for r in only_husk for k in {kind(f) for f in r["husk_findings"]})
     L += ["## Most common Husk findings where ClawHub said clean (candidate false positives)", ""]
     L += [f"- {n} skills: {k}" for k, n in kinds.most_common(15)] + [""]
+    only_ch = [r for r in ok if r["husk"] == "SAFE" and r["clawhub"] != "clean"]
+    codes = collections.Counter(c for r in only_ch for c in set((r.get("clawhub_reasons") or []) + (r.get("clawhub_static_codes") or [])))
+    if codes:
+        L += ["## Why ClawHub flagged skills Husk passed (reason codes)", ""]
+        L += [f"- {n} skills: {c}" for c, n in codes.most_common(20)] + [""]
+    no_static = sum(1 for r in only_ch if not r.get("clawhub_static_codes"))
+    if only_ch:
+        L += [f"Of {len(only_ch)} such skills, {no_static} had no static-scan reason code at ClawHub "
+              "either (flagged by its AI reviewers only).", ""]
     errs = [r for r in rows if not r["husk"]]
     if errs:
         reasons = collections.Counter((r["husk_error"] or "")[:120] for r in errs)

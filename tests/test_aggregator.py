@@ -423,8 +423,16 @@ class _FakeClawHub:
                     if not sk:
                         return self._send(404, b"Skill not found", "text/plain; charset=utf-8")
                     return self._send(200, _zip_bytes(sk["files"]), "application/zip")
+                if self.path.startswith("/api/v1/skills/") and "/verify?" in self.path:
+                    slug = self.path.split("/api/v1/skills/", 1)[1].split("/verify", 1)[0]
+                    sk = outer.skills.get(slug)
+                    body = {"ok": True, "decision": "pass", "slug": slug, "version": sk["version"],
+                            "security": {"status": sk["status"]}}
+                    return self._send(200, json.dumps(body).encode(), "application/json")
                 if self.path.startswith("/api/v1/skills/"):
                     slug = self.path.rsplit("/", 1)[1]
+                    if slug == "shared-name":
+                        return self._send(409, b"Ambiguous skill slug", "text/plain; charset=utf-8")
                     sk = outer.skills.get(slug)
                     if not sk:
                         return self._send(404, b"Skill not found", "text/plain; charset=utf-8")
@@ -580,3 +588,12 @@ def test_ambiguous_slug_without_owner_explains_itself(fake_clawhub):
                                           "files": {"SKILL.md": "x"}}
     err = aggregate_skill_opinions("shared-name", marketplace="clawhub")["opinions"]["husk"]["error"]
     assert "several ClawHub publishers" in err
+
+
+def test_verdict_for_ambiguous_slug_uses_verify_with_owner(fake_clawhub):
+    fake_clawhub.skills["shared-name"] = {"owner": "dana", "version": "3.0.0", "status": "suspicious",
+                                          "files": {"SKILL.md": "x"}}
+    native = aggregate_skill_opinions("dana/shared-name", marketplace="clawhub")["opinions"]["clawhub_native"]
+    assert native["available"] is True
+    assert native["verdict"] == "suspicious" and native["verdict_source"] == "verify"
+    assert any("verify?ownerHandle=dana" in r[1] for r in fake_clawhub.requests if r[0] == "GET")

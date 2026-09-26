@@ -4,6 +4,24 @@ All notable changes to Husk are documented here. Format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.0.0/); versioning
 follows [Semantic Versioning](https://semver.org/).
 
+## [1.1.3] - 2026-09-26
+
+From the second live ClawHub run (600 skills, 0 download errors).
+
+### Changed
+- "File references a credential-file pattern" is an INFO note in documentation
+  files unless a network-send call is within 15 lines. It was 33 of Husk's 45
+  flags on ClawHub-clean skills. Benign clean 90.8% -> 92.2%; recall
+  MalSkillBench 64.2% -> 63.9%, ASB 63.3% -> 63.1%.
+
+### Fixed
+- ClawHub's own verdict was "unavailable" for skills whose name is shared by
+  several publishers; Husk now falls back to /verify?ownerHandle=.
+
+### Added
+- The ClawHub benchmark records ClawHub's reason codes and summarises why
+  ClawHub flagged skills that Husk passed.
+
 ## [1.1.2] - 2026-09-25
 
 Found by running Husk against 452 real ClawHub skills (benchmarks/clawhub_benchmark.py).

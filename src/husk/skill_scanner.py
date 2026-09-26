@@ -201,6 +201,13 @@ SUSPICIOUS_PHRASES = [
 # existing hooks, not new ones built for this.
 SOFT_FINDING_MARKER = "\u25b8SOFT\u25b8"
 
+_NEARBY_SEND = re.compile(
+    r"requests\.(?:post|put|patch)\s*\(|httpx\.(?:post|put)\s*\(|urllib\.request\.urlopen|fetch\s*\([^)]*method\s*:\s*['\"](?:POST|PUT)"
+    r"|axios\.(?:post|put)\s*\(|\bcurl\b[^\n]*\s(?:-d|--data(?:-binary)?|-F|--form|-T|--upload-file)\b"
+    r"|\b(?:scp|rsync|nc|ncat)\s+[^\n]*@|smtplib|\.sendall\s*\(|webhook",
+    re.IGNORECASE,
+)
+
 # Language that addresses an AI agent rather than a human reader; used to
 # decide whether a long hidden comment is a hard flag or an INFO note.
 _AGENT_DIRECTED_COMMENT = re.compile(
@@ -2965,6 +2972,33 @@ def scan_skill_file(path):
     findings.extend(find_role_hijack(text))
     findings.extend(find_download_then_execute(text))
     findings.extend(find_shell_startup_persistence(text))
+
+    # The credential-file-pattern rule reads a documentation file's example
+    # snippets as if they were code. Measured on the benchmarks: when it is
+    # the only reason a skill is flagged and the match is in a .md/.txt file,
+    # it hit 90 benign skills vs 33 malicious; on the live ClawHub run it was
+    # 33 of Husk's 45 flags that ClawHub rated clean. In documentation it is
+    # an INFO note; in code files it stays a hard finding.
+    # Exception: if a network-send call sits within a few lines of the
+    # credential reference, it is code embedded in the document (the
+    # tests/credential_theft.md shape), not prose, and stays a hard finding.
+    if path.lower().endswith((".md", ".mdc", ".txt", ".rst")):
+        lines = text.split("\n")
+
+        def _send_nearby(finding):
+            m = re.match(r"Line (\d+):", finding)
+            if not m:
+                return True
+            n = int(m.group(1)) - 1
+            window = "\n".join(lines[max(0, n - 15): n + 16])
+            return bool(_NEARBY_SEND.search(window))
+
+        findings = [
+            f if (f.startswith(SOFT_FINDING_MARKER) or "references a credential-file pattern" not in f
+                  or _send_nearby(f))
+            else SOFT_FINDING_MARKER + f
+            for f in findings
+        ]
 
     if findings:
         hard_findings = [f for f in findings if not f.startswith(SOFT_FINDING_MARKER)]
