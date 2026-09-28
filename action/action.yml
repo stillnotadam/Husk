@@ -1,8 +1,9 @@
-name: "Husk Skill Scanner"
+name: "Husk Skill Gate"
 description: >
-  Static security scanner for AI agent skill packages. Scans a path in
-  your repo and produces a SARIF report, findings show up directly in
-  this PR and your repo's Security tab via GitHub Code Scanning.
+  Deterministic pre-publish security gate for AI agent skills. Runs Husk's
+  static scan, applies a severity policy, and PASSES or FAILS the build -
+  offline, in seconds, no API key. Optionally uploads SARIF to the Security
+  tab.
 author: "ctrl-adam"
 
 branding:
@@ -14,28 +15,43 @@ inputs:
     description: "Path to the skill package directory to scan"
     required: false
     default: "."
-  fail-on-findings:
+  block-on:
     description: >
-      Whether the action should fail (exit non-zero) if Husk flags
-      anything. Set to "false" to always upload the SARIF report
-      without failing the workflow itself.
+      Fail the build on this severity and above: critical, high, medium, or
+      low. Default 'high' blocks clear threats (credential harvesting, C2
+      IPs, curl|bash from untrusted hosts) while letting ordinary code
+      through. A package's own .huskpolicy file overrides this.
+    required: false
+    default: "high"
+  comment-on-pr:
+    description: "Post the gate result as a PR comment (needs pull-requests: write)."
     required: false
     default: "true"
+  sarif:
+    description: "Also write a SARIF report and upload it to the Security tab."
+    required: false
+    default: "false"
+  attest:
+    description: >
+      Also produce a deterministic in-toto attestation of the scan
+      (husk-attestation.json), uploaded as a build artifact. Reproducible,
+      content-bound proof of what was scanned and the verdict.
+    required: false
+    default: "false"
   virustotal-api-key:
     description: >
-      Optional. Your own VIRUSTOTAL_API_KEY, to additionally check
-      bundled files against VirusTotal's known-malware database.
-      Never required; the static scan runs the same either way.
+      Optional. Your own VIRUSTOTAL_API_KEY - additionally checks bundled
+      files against VirusTotal's known-malware database. Never required.
     required: false
     default: ""
 
 outputs:
-  sarif-path:
-    description: "Path to the generated SARIF report"
-    value: ${{ steps.scan.outputs.sarif-path }}
-  verdict:
-    description: "SAFE or FLAGGED"
-    value: ${{ steps.scan.outputs.verdict }}
+  decision:
+    description: "pass, warn, or fail"
+    value: ${{ steps.gate.outputs.decision }}
+  summary:
+    description: "One-line severity summary"
+    value: ${{ steps.gate.outputs.summary }}
 
 runs:
   using: "composite"
@@ -49,34 +65,85 @@ runs:
       shell: bash
       run: pip install husk-scanner --break-system-packages 2>/dev/null || pip install husk-scanner
 
-    - name: Run Husk
-      id: scan
+    - name: Husk gate
+      id: gate
+      shell: bash
+      run: |
+        set +e
+        husk gate "${{ inputs.path }}" --block-on "${{ inputs.block-on }}" --json > husk-gate.json
+        CODE=$?
+        python3 - <<'PY' >> "$GITHUB_OUTPUT"
+        import json
+        d = json.load(open("husk-gate.json"))
+        c = d["counts"]
+        print(f"decision={d['decision']}")
+        print(f"summary={c['critical']} critical, {c['high']} high, {c['medium']} medium, {c['low']} low, {c['info']} info")
+        PY
+        # Human-readable run log
+        husk gate "${{ inputs.path }}" --block-on "${{ inputs.block-on }}"
+        exit $CODE
+
+    - name: Husk attestation
+      if: always() && inputs.attest == 'true'
+      shell: bash
+      run: husk attest "${{ inputs.path }}" --output husk-attestation.json || true
+
+    - name: Upload attestation
+      if: always() && inputs.attest == 'true'
+      uses: actions/upload-artifact@v4
+      with:
+        name: husk-attestation
+        path: husk-attestation.json
+        if-no-files-found: ignore
+
+    - name: Write SARIF
+      if: always() && inputs.sarif == 'true'
       shell: bash
       env:
         VIRUSTOTAL_API_KEY: ${{ inputs.virustotal-api-key }}
       run: |
-        set +e
-        SARIF_PATH="husk-report.sarif"
         if [ -n "$VIRUSTOTAL_API_KEY" ]; then
-          husk package "${{ inputs.path }}" --output "$SARIF_PATH" --virustotal
+          husk package "${{ inputs.path }}" --output husk-report.sarif --virustotal || true
         else
-          husk package "${{ inputs.path }}" --output "$SARIF_PATH"
-        fi
-        EXIT_CODE=$?
-        echo "sarif-path=$SARIF_PATH" >> "$GITHUB_OUTPUT"
-        if [ "$EXIT_CODE" -eq 0 ]; then
-          echo "verdict=SAFE" >> "$GITHUB_OUTPUT"
-        else
-          echo "verdict=FLAGGED" >> "$GITHUB_OUTPUT"
-        fi
-        if [ "${{ inputs.fail-on-findings }}" = "true" ]; then
-          exit $EXIT_CODE
-        else
-          exit 0
+          husk package "${{ inputs.path }}" --output husk-report.sarif || true
         fi
 
-    - name: Upload SARIF to GitHub Code Scanning
-      if: always()
+    - name: Upload SARIF
+      if: always() && inputs.sarif == 'true'
       uses: github/codeql-action/upload-sarif@v3
       with:
-        sarif_file: ${{ steps.scan.outputs.sarif-path }}
+        sarif_file: husk-report.sarif
+
+    - name: Comment on PR
+      if: always() && inputs.comment-on-pr == 'true' && github.event_name == 'pull_request'
+      uses: actions/github-script@v7
+      with:
+        script: |
+          const fs = require('fs');
+          let d;
+          try { d = JSON.parse(fs.readFileSync('husk-gate.json', 'utf8')); }
+          catch (e) { return; }
+          const c = d.counts;
+          const emoji = { pass: '✅', warn: '⚠️', fail: '❌' }[d.decision] || '❓';
+          const head = { pass: 'passed', warn: 'passed with warnings', fail: 'FAILED' }[d.decision];
+          let body = `${emoji} **Husk skill gate: ${head}**\n\n`;
+          body += `\`${c.critical} critical · ${c.high} high · ${c.medium} medium · ${c.low} low · ${c.info} info\`\n`;
+          const list = (title, items) => {
+            if (!items.length) return '';
+            let s = `\n**${title}**\n`;
+            for (const e of items.slice(0, 15)) s += `- \`${e.severity}\` ${e.finding.replace(/`/g, "'")}\n`;
+            if (items.length > 15) s += `- …and ${items.length - 15} more\n`;
+            return s;
+          };
+          body += list('Blocking', d.blocking);
+          body += list('Warnings', d.warnings);
+          body += `\n<sub>Husk static gate · deterministic · offline · [github.com/ctrl-adam/Husk](https://github.com/ctrl-adam/Husk)</sub>`;
+          const { data: comments } = await github.rest.issues.listComments({
+            owner: context.repo.owner, repo: context.repo.repo, issue_number: context.issue.number,
+          });
+          const prev = comments.find(c => c.user.type === 'Bot' && c.body.includes('Husk skill gate'));
+          if (prev) {
+            await github.rest.issues.updateComment({ owner: context.repo.owner, repo: context.repo.repo, comment_id: prev.id, body });
+          } else {
+            await github.rest.issues.createComment({ owner: context.repo.owner, repo: context.repo.repo, issue_number: context.issue.number, body });
+          }

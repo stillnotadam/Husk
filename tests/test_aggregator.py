@@ -18,6 +18,7 @@ import urllib.error
 import pytest
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "src"))
+from husk import aggregator  # noqa: E402
 from husk.aggregator import (  # noqa: E402
     EXTERNAL_SOURCES,
     MARKETPLACE_RESOLVERS,
@@ -597,3 +598,99 @@ def test_verdict_for_ambiguous_slug_uses_verify_with_owner(fake_clawhub):
     assert native["available"] is True
     assert native["verdict"] == "suspicious" and native["verdict_source"] == "verify"
     assert any("verify?ownerHandle=dana" in r[1] for r in fake_clawhub.requests if r[0] == "GET")
+
+
+def test_github_skill_helper_parses_refs(monkeypatch):
+    """The GitHub-backed resolver used by skills.sh/agentskill.sh parses
+    owner/repo, owner/repo/subpath, and full github URLs. We stub the network
+    fetch and just assert the ref parsing + dispatch is correct."""
+    calls = {}
+
+    def fake_fetch(owner_repo, skill_subpath=None, workdir=None):
+        calls["owner_repo"] = owner_repo
+        calls["subpath"] = skill_subpath
+        return "FAKE_PATH"
+
+    monkeypatch.setattr(aggregator, "_fetch_github_skill", fake_fetch)
+
+    aggregator.resolve_skillssh_skill("leonxlnx/taste-skill")
+    assert calls["owner_repo"] == "leonxlnx/taste-skill"
+
+    aggregator.resolve_skillssh_skill("https://github.com/leonxlnx/taste-skill/tree/main/skills/foo")
+    assert calls["owner_repo"] == "leonxlnx/taste-skill"
+    assert calls["subpath"] == "skills/foo"
+
+
+def test_agentskillsh_falls_back_to_github(monkeypatch):
+    """When agentskill.sh's own API is unreachable, the resolver falls back to
+    fetching the skill from its GitHub source."""
+    def boom(*a, **k):
+        raise OSError("blocked")
+
+    monkeypatch.setattr(aggregator.urllib.request, "urlopen", boom)
+    called = {}
+
+    def fake_fetch(owner_repo, skill_subpath=None, workdir=None):
+        called["ref"] = owner_repo
+        return "FAKE_PATH"
+
+    monkeypatch.setattr(aggregator, "_fetch_github_skill", fake_fetch)
+    result = aggregator.resolve_agentskillsh_skill("leonxlnx/taste-skill")
+    assert result == "FAKE_PATH"
+    assert called["ref"] == "leonxlnx/taste-skill"
+
+
+# Real HTML captured from the live sites (Sept 2026), locked in so the audit
+# parsers can be regression-tested without network access.
+_REAL_AGENTSKILLSH_SECURITY_HTML = (
+    "title: Security Audit for design-taste-frontend (47/100) | agentskill.sh\n"
+    "meta-description: Full security analysis. Score: 47/100. Tested across 12 threat categories.\n"
+    "Security Issues 35 0 critical 1 high 1 medium 33 low\nScanned on May 27, 2026"
+)
+_REAL_SKILLSSH_SOCKET_HTML = (
+    "[skills]/[swan-gtm]/[gtm-skills]/[score]/Socket\n# score\n\nPass\n\n"
+    "Audited by Socket on Jul 28, 2026\nChecks"
+)
+
+
+class _FakeResp:
+    def __init__(self, text):
+        self._t = text.encode()
+
+    def read(self):
+        return self._t
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *a):
+        return False
+
+
+def test_agentskillsh_native_audit_parses_real_page(monkeypatch):
+    html = _REAL_AGENTSKILLSH_SECURITY_HTML
+    monkeypatch.setattr(aggregator.urllib.request, "urlopen",
+                        lambda req, timeout=None: _FakeResp(html))
+    r = aggregator._fetch_agentskillsh_native_audit("leonxlnx/taste-skill")
+    assert r["available"] is True
+    assert r["score"] == 47
+    assert r["counts"] == {"critical": 0, "high": 1, "medium": 1, "low": 33}
+    assert r["flagged"] is True  # score < 50 and a high finding
+
+
+def test_skillssh_native_audit_parses_real_page(monkeypatch):
+    html = _REAL_SKILLSSH_SOCKET_HTML
+    monkeypatch.setattr(aggregator.urllib.request, "urlopen",
+                        lambda req, timeout=None: _FakeResp(html))
+    r = aggregator._fetch_skillssh_native_audit("swan-gtm/gtm-skills/score")
+    assert r["available"] is True
+    assert "Pass" in r["verdict"]
+    assert r["flagged"] is False
+
+
+def test_audit_sources_unavailable_on_network_error(monkeypatch):
+    def boom(req, timeout=None):
+        raise OSError("blocked")
+    monkeypatch.setattr(aggregator.urllib.request, "urlopen", boom)
+    assert aggregator._fetch_agentskillsh_native_audit("a/b")["available"] is False
+    assert aggregator._fetch_skillssh_native_audit("a/b/c")["available"] is False

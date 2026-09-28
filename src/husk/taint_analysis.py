@@ -93,21 +93,47 @@ SINK_CALL_NAMES = {
 
 
 class TaintFinding:
-    def __init__(self, line, source_desc, sink_desc, var_name):
-        self.line = line
+    def __init__(self, line, source_desc, sink_desc, var_name, source_line=None):
+        self.line = line                # sink line
         self.source_desc = source_desc
         self.sink_desc = sink_desc
         self.var_name = var_name
+        self.source_line = source_line  # where the tainted value originated
 
     def __str__(self):
+        origin = f" (from line {self.source_line})" if self.source_line else ""
         return (
             f"Line {self.line}: taint-tracked data flow - a value from "
-            f"{self.source_desc} (via variable '{self.var_name}') reaches "
+            f"{self.source_desc}{origin} (via variable '{self.var_name}') reaches "
             f"{self.sink_desc}. This flow was found by tracing actual "
             f"variable assignments through the code (AST-based analysis), "
             f"not by pattern-matching nearby text - it would be caught even "
             f"if the source and sink are far apart or separated by other code."
         )
+
+    def trace(self):
+        """A human-readable, step-by-step data-flow trace - the 'why' a
+        security reviewer trusts over a verdict. Returns a list of steps,
+        each an explicit link in the source -> variable -> sink chain."""
+        steps = []
+        src_loc = f"line {self.source_line}" if self.source_line else "an earlier statement"
+        steps.append(f"1. SOURCE ({src_loc}): a value is read from {self.source_desc}.")
+        steps.append(f"2. FLOW: it is held in the variable '{self.var_name}' and carried "
+                     f"through the code (across reassignments, not just adjacent lines).")
+        steps.append(f"3. SINK (line {self.line}): '{self.var_name}' reaches {self.sink_desc} - "
+                     f"data that came from a sensitive source leaves via a dangerous call.")
+        return steps
+
+    def to_dict(self):
+        """Structured form of the trace, for JSON/SARIF consumers."""
+        return {
+            "sink_line": self.line,
+            "source_line": self.source_line,
+            "source": self.source_desc,
+            "variable": self.var_name,
+            "sink": self.sink_desc,
+            "trace": self.trace(),
+        }
 
 
 def _call_name(node):
@@ -366,7 +392,7 @@ def _analyze_taint_flows_once(source_code, filename, seed_tainted_returning):
                     tainted_used = used & tainted.keys()
                     if tainted_used:
                         source_hit = True
-                        source_desc = tainted[next(iter(tainted_used))]
+                        source_desc = tainted[next(iter(tainted_used))][0]
                     else:
                         # x = json.dumps(some_helper_func()).encode(...)
                         # style: the tracked tainted-returning function
@@ -381,7 +407,7 @@ def _analyze_taint_flows_once(source_code, filename, seed_tainted_returning):
                 if source_hit:
                     for target in stmt.targets:
                         if isinstance(target, ast.Name):
-                            tainted[target.id] = source_desc
+                            tainted[target.id] = (source_desc, getattr(stmt, 'lineno', 0))
                         elif isinstance(target, ast.Subscript) and isinstance(target.value, ast.Name):
                             # blob[p] = tainted_value - treat the whole
                             # container as tainted, not per-key (a
@@ -391,7 +417,7 @@ def _analyze_taint_flows_once(source_code, filename, seed_tainted_returning):
                             # collects stolen file contents into a dict
                             # via subscript assignment, not a plain
                             # variable.
-                            tainted[target.value.id] = source_desc
+                            tainted[target.value.id] = (source_desc, getattr(stmt, 'lineno', 0))
 
                 # Separately: track `_TARGETS = ['~/.aws/credentials', ...]`
                 # style assignments, so a later `for p in _TARGETS:` can
@@ -412,7 +438,7 @@ def _analyze_taint_flows_once(source_code, filename, seed_tainted_returning):
                     if isinstance(item.context_expr, ast.Call) and item.optional_vars is not None:
                         is_src, desc = _is_source_call(item.context_expr)
                         if is_src and isinstance(item.optional_vars, ast.Name):
-                            tainted[item.optional_vars.id] = desc
+                            tainted[item.optional_vars.id] = (desc, getattr(stmt, 'lineno', 0))
                         else:
                             # The path argument might itself be a
                             # variable already tainted (e.g. a loop
@@ -432,7 +458,7 @@ def _analyze_taint_flows_once(source_code, filename, seed_tainted_returning):
             # variable, often not even in the same statement).
             if isinstance(stmt, ast.For) and isinstance(stmt.target, ast.Name):
                 if _list_contains_credential_marker(stmt.iter) or isinstance(stmt.iter, ast.Name) and stmt.iter.id in credential_list_vars:
-                    tainted[stmt.target.id] = "a credential-shaped path from a list of targets"
+                    tainted[stmt.target.id] = ("a credential-shaped path from a list of targets", getattr(stmt, "lineno", 0))
                 elif isinstance(stmt.iter, ast.Name) and stmt.iter.id in tainted:
                     tainted[stmt.target.id] = tainted[stmt.iter.id]
 
@@ -452,11 +478,13 @@ def _analyze_taint_flows_once(source_code, filename, seed_tainted_returning):
                     hit = args_names & tainted.keys()
                     if hit:
                         var_name = next(iter(hit))
+                        _sd, _sl = tainted[var_name]
                         findings.append(TaintFinding(
                             line=getattr(node, "lineno", 0),
-                            source_desc=tainted[var_name],
+                            source_desc=_sd,
                             sink_desc=sink_desc,
                             var_name=var_name,
+                            source_line=_sl,
                         ))
 
             # Taint flowing INTO a function through its parameters, not
@@ -483,12 +511,14 @@ def _analyze_taint_flows_once(source_code, filename, seed_tainted_returning):
                     sink_desc = _function_sinks_on_param(func_body, param_names[i])
                     if sink_desc:
                         var_name = next(iter(tainted_arg))
+                        _sd, _sl = tainted[var_name]
                         findings.append(TaintFinding(
                             line=getattr(node, "lineno", 0),
-                            source_desc=tainted[var_name],
+                            source_desc=_sd,
                             sink_desc=f"{sink_desc} (via parameter "
                                       f"'{param_names[i]}' of '{called_name}()')",
                             var_name=var_name,
+                            source_line=_sl,
                         ))
                 for kw in node.keywords:
                     if kw.arg not in param_names or kw.value is None:
@@ -499,12 +529,14 @@ def _analyze_taint_flows_once(source_code, filename, seed_tainted_returning):
                     sink_desc = _function_sinks_on_param(func_body, kw.arg)
                     if sink_desc:
                         var_name = next(iter(tainted_arg))
+                        _sd, _sl = tainted[var_name]
                         findings.append(TaintFinding(
                             line=getattr(node, "lineno", 0),
-                            source_desc=tainted[var_name],
+                            source_desc=_sd,
                             sink_desc=f"{sink_desc} (via parameter "
                                       f"'{kw.arg}' of '{called_name}()')",
                             var_name=var_name,
+                            source_line=_sl,
                         ))
 
             # `return <expr>` where expr contains a tainted name - marks
@@ -514,7 +546,7 @@ def _analyze_taint_flows_once(source_code, filename, seed_tainted_returning):
                 returned_names = _names_used_in(stmt.value)
                 hit = returned_names & tainted.keys()
                 if hit:
-                    tainted_returning_functions[current_func] = tainted[next(iter(hit))]
+                    tainted_returning_functions[current_func] = tainted[next(iter(hit))][0]
 
             # Recurse into function/class bodies as their own scope.
             if isinstance(stmt, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):

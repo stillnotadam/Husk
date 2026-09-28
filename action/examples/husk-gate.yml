@@ -1,0 +1,26 @@
+# Drop this in .github/workflows/ to block malicious skills before they merge.
+# It runs on every PR and push, fails the build on high-severity findings,
+# and comments the result on the PR. No API key, no secrets, runs in seconds.
+name: Husk skill gate
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+  pull-requests: write     # for the PR comment (drop if comment-on-pr: false)
+
+jobs:
+  gate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: ctrl-adam/Husk/action@main
+        with:
+          path: "."
+          block-on: "high"      # critical | high | medium | low
+          comment-on-pr: "true"
+          # sarif: "true"        # also upload to the Security tab

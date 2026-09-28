@@ -1,8 +1,61 @@
 # Husk
 
-A static security scanner for AI agent skill packages - built to specifically defend against bypass techniques that were shown, in published 2026 security research, to defeat production scanners from Snyk, Cisco, and Vercel's skills.sh.
+**A lifecycle security layer for AI agent skills.** Most tools check a skill once - at publish, or at install. Husk covers the whole lifecycle, and does the things a server-side AI review structurally can't: run *before* publish in your own CI, produce *deterministic, verifiable* proof of what it found, compare a skill *across marketplaces*, and keep watching *after* install for a malicious update.
+
+| Stage | Command | What it does that a point-in-time AI review can't |
+|---|---|---|
+| **Before publish** | `husk gate` | One deterministic pass/fail, offline, in CI on every push - no API cost |
+| **At publish** | `husk attest` | A signed, reproducible [in-toto](https://github.com/in-toto/attestation) attestation bound to the skill's exact bytes |
+| **Across registries** | `husk crossref` | Detects the same skill serving *different content* on different marketplaces (a substitution attack) |
+| **After install** | `husk watch` | Alerts when an installed skill that was safe turns malicious after an update |
+| **Any time** | `husk explain` | Shows the exact source&rarr;variable&rarr;sink data-flow trace behind a finding - the auditable *why* |
+
+Underneath is a detection engine with **real AST-based taint analysis for both Python and JavaScript/TypeScript** (not just regex), that **reads bundled PDFs** where attackers hide instructions, and that deterministically catches **no-code prompt-injection** attacks usually assumed to require an LLM. Built to defeat bypass techniques shown, in published 2026 research, to beat production scanners from Snyk, Cisco, and Vercel's skills.sh - benchmarked on **11,225 real malicious samples** (see below), clearing **99.6%** of real legitimate skills. Everything is offline, deterministic, and open-source (AGPL-3.0). No marketplace lock-in, no API keys, no data leaves your machine.
 
 [CHANGELOG](CHANGELOG.md) - what's new in each release, actively maintained.
+
+## Block malicious skills in CI, in 3 lines
+
+`husk gate` turns a scan into one deterministic **pass / fail** decision - offline, in seconds, no API key, no secrets. It's the check to run *before* a skill is published, and in CI on every push. Add this to `.github/workflows/husk.yml`:
+
+```yaml
+- uses: actions/checkout@v4
+- uses: ctrl-adam/Husk/action@main
+  with: { block-on: "high" }
+```
+
+That fails the build on clear threats (credential harvesting, C2 IPs, `curl | bash` from untrusted hosts) while letting ordinary skill code through, and comments the result on the PR. Locally it's one command:
+
+```bash
+pip install husk-scanner
+husk gate ./my-skill            # -> PASS or FAIL + exit code, ready for CI
+husk gate ./my-skill --json     # machine-readable, for your own pipeline
+```
+
+**Tune the bar per project** with a `.huskpolicy` file in the package:
+
+```json
+{
+  "block_on": "high",
+  "example_paths": ["references/*.md"]
+}
+```
+
+`example_paths` is for security tools whose docs legitimately quote attack strings - findings in those declared files are reported, not blocking. It's author-declared on purpose: Husk never silently trusts a package just because it *looks* like a security tool (real malware is disguised that way).
+
+Also runs as a [pre-commit hook](.pre-commit-hooks.yaml).
+
+## Reproducible attestation: proof an AI review can't give
+
+An LLM review gives a different answer on rerun and can't prove what it looked at. Husk produces a **deterministic, content-bound attestation** in the standard [in-toto Statement v1](https://github.com/in-toto/attestation) / SLSA verification-summary format that supply-chain tooling already understands:
+
+```bash
+husk attest ./my-skill --output my-skill.att.json
+# ... later, anyone, offline, with no trust in you or any server:
+husk verify-attestation ./my-skill my-skill.att.json   # MATCH or MISMATCH
+```
+
+The attestation binds a SHA-256 of the skill's exact content to Husk's verdict and the exact ruleset digest that produced it. Re-run `husk attest` on the same skill and you get a byte-identical statement; change one byte of the skill and `verify-attestation` reports MISMATCH. That's a verifiable, auditable record for a compliance report or a registry's provenance trail - something no post-publish AI review can produce. Optional Sigstore keyless signing (`pip install husk-scanner[sign]`, then `husk attest --sign`) adds *who* attested it on top.
 
 ## Benchmark - how it compares
 
@@ -20,7 +73,7 @@ corner:
 
 | | Recall (real malicious) | Precision (real legitimate) |
 |---|---|---|
-| **Husk** | **63.1–63.9% (full datasets, 11,225 real samples)** | **98.8%** |
+| **Husk** | **63.8–65.6% recall (11,225 real malicious samples)** | **99.6% of real skills cleared** |
 | Best competitor at matched precision | ~57% | 81–94% |
 | Best competitor raw recall (loose mode, high false positives) | 92.5% | 22–59% |
 
@@ -76,17 +129,38 @@ For development (editable install, includes the test suite and dev tools):
 git clone https://github.com/ctrl-adam/Husk.git
 cd Husk
 pip install -e ".[dev]"
-python3 -m pytest tests/ -v   # 73 passed, 10 xfailed
+python3 -m pytest tests/ -v   # 258 passed, 10 xfailed
 ```
 
 ## Usage
 
 ```bash
-# Scan a single skill file
+# The pre-publish gate: one PASS/FAIL decision (see the top of this README)
+husk gate path/to/skill_package/
+
+# Scan a single skill file (full findings, not a pass/fail)
 husk skill path/to/SKILL.md
 
 # Scan a whole skill package (handles nested/disguised archives)
 husk package path/to/skill_package/
+
+# Compare against a marketplace's own verdict (e.g. ClawHub)
+husk aggregate owner/skill-name
+
+# Cross-marketplace: is the same skill identical across registries?
+husk crossref owner/skill-name
+
+# Watch installed skills over time - alert if one turns malicious after an update
+husk watch
+
+# Explain WHY: the exact source -> variable -> sink data-flow behind a finding
+husk explain path/to/skill_package/
+
+# Scan a whole registry / skills dir incrementally (only changed skills re-scanned)
+husk registry ~/.claude/skills
+
+# Produce a signed, reproducible attestation of the scan (see below)
+husk attest path/to/skill_package/ --output skill.att.json
 
 # Scan a pickle-based model file
 husk model path/to/model.pkl
@@ -292,7 +366,7 @@ exactly that.
 
 ## What v1 does NOT do yet
 
-- **Real-world recall is 63.1-63.9%, not 100%** (measured against 11,225 real confirmed-malicious samples across two independent datasets - see BENCHMARK.md for the full methodology). The main gap: **novel, semantically-disguised attacks with no code and no recognizable keywords** - a subtle instruction-blurring attack and a fake "compliance auditor" asking in plain prose for secrets, both missed by static analysis and saved openly in `tests/known_misses/` rather than hidden. This matches published research showing static pattern-matching tops out around 13-32% recall on novel/disguised attacks generally - not a Husk-specific flaw, but a real, honest limit of this entire approach. The optional `--llm-review` layer exists specifically for this gap.
+- **Real-world recall is 63.7-65.6%, not 100%** (measured against 11,225 real confirmed-malicious samples across two independent datasets - see BENCHMARK.md for the full methodology). The main gap: **novel, semantically-disguised attacks with no code and no recognizable keywords** - a subtle instruction-blurring attack and a fake "compliance auditor" asking in plain prose for secrets, both missed by static analysis and saved openly in `tests/known_misses/` rather than hidden. This matches published research showing static pattern-matching tops out around 13-32% recall on novel/disguised attacks generally - not a Husk-specific flaw, but a real, honest limit of this entire approach. The optional `--llm-review` layer exists specifically for this gap.
 - **Two structural limits no pre-execution scanner, static or LLM, can ever close**: Self-Mutating Poisoning (the malicious content doesn't exist in the file until the skill actually runs) and dynamically-generated payloads. Confirmed directly against real samples exhibiting both patterns.
 - Archive extraction currently unpacks ZIP; GZIP/7z/RAR are detected (a mismatched-extension archive still gets flagged) but not yet recursively unpacked
 - The AST taint tracker follows data flow within a file, including into a function through its parameters, but doesn't re-trace taint propagating deeper inside a callee's own body, and doesn't cross module/file boundaries

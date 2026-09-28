@@ -1,0 +1,14 @@
+# Lets any repo run Husk's gate as a pre-commit hook:
+#   # .pre-commit-config.yaml
+#   repos:
+#     - repo: https://github.com/ctrl-adam/Husk
+#       rev: v1.1.4
+#       hooks:
+#         - id: husk-gate
+- id: husk-gate
+  name: Husk skill gate
+  description: Block committing a skill with high-severity security findings.
+  entry: husk gate .
+  language: python
+  pass_filenames: false
+  always_run: true

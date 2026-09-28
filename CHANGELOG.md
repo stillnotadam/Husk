@@ -4,6 +4,138 @@ All notable changes to Husk are documented here. Format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.0.0/); versioning
 follows [Semantic Versioning](https://semver.org/).
 
+## [1.3.1] - 2026-09-28
+
+Marketplace lookup actually works for all three registries, plus each
+marketplace's own audit verdict.
+
+### Fixed
+- skills.sh and agentskill.sh skill lookup now resolve real content (was
+  "unavailable"). Both marketplaces index GitHub-hosted skills, so Husk fetches
+  the skill straight from its GitHub source; agentskill.sh also falls back to
+  this if its own API is unreachable. Verified end-to-end on a real live skill.
+
+### Added
+- skills.sh and agentskill.sh native audit verdicts: alongside Husk's own scan,
+  the aggregate now shows each marketplace's own published security verdict
+  (skills.sh's Socket/Snyk/Trust-Hub Pass/Warn/Fail, agentskill.sh's 0-100
+  score). Parsers verified against the real live audit pages.
+
+## [1.3.0] - 2026-09-27
+
+Multi-language depth, PDF coverage, and the false-positive fixes that a real
+ecosystem scan of live GitHub skills exposed.
+
+### Added
+- **AST-based JS/TS taint engine** (esprima): real source->assignment->sink
+  data-flow analysis for JavaScript and TypeScript, the same as Python. Powers
+  `husk explain` for JS/TS. Single-env-var-to-its-own-API stays clean; only
+  whole-env / credential / exec-eval flows flag.
+- **PDF text extraction**: bundled PDFs are extracted and run through the full
+  detection suite, catching payloads hidden in "reference documents". Defensive
+  against huge/encrypted/malformed/image-only PDFs.
+- **Ecosystem research harnesses** (benchmarks/): mass-scan live marketplace
+  and GitHub skills, rank by severity, produce a triage shortlist.
+
+### Fixed (found by scanning real live skills)
+- Office/container formats (.docx, .xlsx, .pptx, .jar, .whl, .ipynb, fonts...)
+  are legitimate ZIP containers, no longer flagged as hidden payloads - this
+  alone had inflated one real repo's score by ~12,000.
+- A bare http(s):// URL no longer counts as a data-movement "action" in the
+  secrecy rule, which had fired all over ordinary changelog prose.
+- The newest attack types (reverse shells, OAST/exfil beacons, bulk env
+  exfiltration, cloud-metadata SSRF, Discord/Telegram C2, JS/TS taint) now rank
+  critical/high in the gate instead of defaulting to medium.
+- Duplicate findings are deduped in scan_package.
+
+## [1.2.0] - 2026-09-27
+
+Husk becomes a lifecycle security layer, not just a scanner. Three new
+capabilities, each doing something a point-in-time / server-side AI review
+structurally cannot.
+
+### Added
+- **`husk attest` / `husk verify-attestation`** - deterministic, content-bound
+  attestations in the standard in-toto Statement v1 / SLSA verification-summary
+  format. Binds a SHA-256 of the skill's exact content to Husk's verdict and
+  the exact ruleset digest. Reproducible (byte-identical on rerun),
+  offline-verifiable, tamper-evident. Optional Sigstore keyless signing via the
+  `[sign]` extra. GitHub Action gains an `attest` input.
+- **`husk crossref`** - cross-marketplace verification. Fetches the same skill
+  from every registry, compares content digests and verdicts, and flags a
+  registry serving different or more-dangerous content under the same name (a
+  supply-chain substitution attack). The neutral layer no single marketplace
+  can be.
+- **`husk watch`** - re-scans installed skills against a local baseline and
+  alerts when one that was SAFE turns FLAGGED after a content change (a
+  malicious update). Auto-discovers skills under the common agent install
+  roots. The time dimension no point-in-time scan covers.
+- **`husk explain`** - explainable data-flow: the exact source -> variable ->
+  sink trace behind each taint finding, human-readable or JSON. The auditable
+  "why" a security reviewer trusts over a verdict, and something an LLM review
+  cannot produce deterministically. The taint engine now records the source
+  line, not just the sink.
+- **`husk registry`** + content-addressed scan cache - scan many skills (a
+  whole registry, an install dir) incrementally: a skill's result is keyed by
+  its content digest, so unchanged skills are never re-scanned. `husk watch`
+  uses it too. A repeat sweep of thousands of skills becomes minutes, not
+  hours. A ruleset change (Husk upgrade) transparently invalidates the cache.
+- **Real AST-based JS/TS taint engine** (esprima) - Husk now follows data flow
+  (source -> assignment -> sink) in JavaScript and TypeScript, the same as
+  Python, not just regex. Powers `husk explain` for JS/TS too. Zero false
+  positives; single-env-var-to-its-own-API stays clean, only whole-env /
+  credential / exec-eval flows are flagged.
+- **PDF text extraction** - bundled PDFs are extracted and run through the full
+  detection suite, catching payloads (prose injection, curl|bash, persistence)
+  hidden in "reference documents" where a text-only scanner never looks. +6
+  real catches on the benchmark, 0 false positives. Defensive against huge /
+  encrypted / malformed / image-only PDFs.
+- Detection: two no-code prose prompt-injection classes now caught
+  deterministically - system-prompt exfiltration and jailbreak / safety-bypass
+  instructions - the attacks usually assumed to require an LLM reviewer.
+  +60 real catches, zero false positives on 4,249 benign skills. Recall
+  MalSkillBench -> 65.6%, ASB -> 63.7%.
+
+### Changed (detection - all measured on the 15,474-sample benchmark, zero new false positives)
+- New rules from a systematic miss analysis: out-of-band exfil-testbed callback
+  domains (oast.fun, Beeceptor, Pipedream, Burp Collaborator...), staged /
+  obfuscated code execution (payload-as-string, exec(base64...),
+  getattr(__import__), exec(compile)), concrete C2/exfil sinks (real
+  Discord/Telegram webhooks, reverse-shell I/O redirection), and cloud
+  instance-metadata SSRF. Recall: MalSkillBench 63.9% -> 64.8%, ASB 61.3% ->
+  63.3%, while benign clearance rose to 95.4% and curated real skills to 99.6%.
+
+## [1.1.4] - 2026-09-27
+
+Focus: precision (making Husk trustworthy on real skills) and adoption
+(making it something a registry can actually drop into CI).
+
+### Added
+- `husk gate <package>`: a deterministic pre-publish gate - one PASS/WARN/FAIL
+  decision, offline, in milliseconds, no API cost. Severity-tiered
+  (critical/high/medium/low/info); a finding is not a verdict (curl|bash from
+  bun.sh does not block, a C2 IP does). `--json` for CI, `--block-on` to set
+  the bar, exit code 1 on fail.
+- `.huskpolicy` file: per-package policy (block_on / warn_on / ignore /
+  example_paths). `example_paths` lets a security tool declare the docs that
+  legitimately quote attack strings, so those are reported not blocked -
+  author-declared, never auto-guessed (real malware is disguised as security
+  tooling, measured on the benchmark).
+- GitHub Action rebuilt around the gate: severity-based pass/fail, PR comment
+  with the result, optional SARIF upload. Example workflow + pre-commit hook.
+
+### Changed (precision, all measured on the 15,474-sample benchmark)
+- Proximity requirement added to the identity-file, wallet, and credential-
+  harvesting rules: the marker and the dangerous action must be near each
+  other, not merely both present somewhere in the file.
+- Trusted-installer allowlist: `curl | bash` from a reputable vendor endpoint
+  (bun.sh, rustup, foundry, the OpenClaw CLI, ...) is INFO; unknown hosts stay
+  flagged.
+- Bare-IP rule excludes bind-all/placeholder/doc IPs (0.0.0.0, 1.2.3.4, RFC
+  5737). osascript-JXA and split-base64-without-a-real-payload demoted to INFO.
+- Net result: benign skills correctly cleared 92.2% -> 95.4%, curated real
+  skills 98.8% -> 99.6%, recall 63.9% -> 62.8%.
+
 ## [1.1.3] - 2026-09-26
 
 From the second live ClawHub run (600 skills, 0 download errors).

@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "husk-scanner"
-version = "1.1.3"
+version = "1.3.1"
 description = "Static security scanner for AI agent skill packages - built and adversarially self-tested against documented bypass techniques, validated against real confirmed-malicious samples."
 readme = "README.md"
 license = "AGPL-3.0-or-later"
@@ -27,10 +27,11 @@ classifiers = [
     "Topic :: Software Development :: Quality Assurance",
     "Environment :: Console",
 ]
-dependencies = []
+dependencies = ["esprima>=4.0", "pypdf>=4.0"]
 
 [project.optional-dependencies]
 dev = ["pytest>=7.0", "pytest-cov>=4.0", "ruff>=0.6.0", "mypy>=1.10"]
+sign = ["sigstore>=2.0"]
 
 [project.urls]
 Homepage = "https://github.com/ctrl-adam/Husk"
@@ -97,3 +98,7 @@ ignore = [
 # exists for production code where asserts get stripped in optimized
 # mode.
 "tests/*" = ["E402", "S101"]
+# Research/benchmark scripts: not part of the shipped package. They open
+# fixed public URLs (github/codeload) and use try/except/pass deliberately
+# to keep a long scan resilient to one bad repo.
+"benchmarks/*" = ["S310", "S110", "S112", "SIM105", "SIM115", "E402", "BLE001", "PLW2901", "E702", "F841", "PLC0415", "E741", "S311"]

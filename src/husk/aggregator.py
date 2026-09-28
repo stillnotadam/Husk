@@ -39,6 +39,7 @@ here.
 import io
 import json
 import os
+import re
 import shutil
 import tarfile
 import tempfile
@@ -265,6 +266,73 @@ def fetch_clawhub_skill(skill_ref, workdir=None):
         return None, _describe_error(exc, slug)
 
 
+def _fetch_github_skill(owner_repo, skill_subpath=None, workdir=None):
+    """Fetch a skill's real content from its GitHub repo (the actual source
+    both skills.sh and agentskill.sh index over). Returns the local dir the
+    content was written to, or None. Never raises.
+
+    owner_repo: "owner/repo". skill_subpath: optional path to a specific skill
+    folder inside the repo (e.g. "skills/design-taste-frontend"); if omitted,
+    the repo's own SKILL.md layout is written as-is so the package scanner sees
+    every file. GitHub's codeload endpoint is used (public, no auth, no API
+    rate limit), trying main then master.
+    """
+    parts = owner_repo.strip().strip("/").split("/")
+    if len(parts) < 2:
+        return None
+    owner, repo = parts[0], parts[1]
+    # a ref like owner/repo/skills/foo -> repo=repo, subpath=skills/foo
+    if skill_subpath is None and len(parts) > 2:
+        skill_subpath = "/".join(parts[2:])
+    data = None
+    for branch in ("main", "master"):
+        url = f"https://codeload.github.com/{owner}/{repo}/tar.gz/refs/heads/{branch}"
+        try:
+            req = urllib.request.Request(  # noqa: S310 - fixed codeload host
+                url, headers={"User-Agent": "husk-scanner (github.com/ctrl-adam/Husk)"})
+            with urllib.request.urlopen(req, timeout=30) as resp:  # noqa: S310
+                data = resp.read()
+            break
+        except Exception:  # noqa: BLE001,S112 - try the next branch
+            continue
+    if not data or len(data) > 80 * 1024 * 1024:
+        return None
+    workdir = workdir or tempfile.mkdtemp(prefix="husk_github_")
+    try:
+        with tarfile.open(fileobj=io.BytesIO(data)) as tf:
+            members = tf.getmembers()
+            if not members:
+                return None
+            root = members[0].name.split("/")[0]  # e.g. repo-main
+            want = f"{root}/{skill_subpath.strip('/')}/" if skill_subpath else None
+            wrote = 0
+            for m in members:
+                if not m.isfile():
+                    continue
+                name = m.name
+                if name.startswith("/") or ".." in name.split("/"):
+                    continue
+                if want and not name.startswith(want):
+                    continue
+                if m.size > 4 * 1024 * 1024:
+                    continue
+                # strip the leading root (and skill subpath, if any) for a clean tree
+                rel = name[len(want):] if want else name[len(root) + 1:]
+                if not rel:
+                    continue
+                dest = os.path.join(workdir, rel)
+                os.makedirs(os.path.dirname(dest) or workdir, exist_ok=True)
+                try:
+                    with open(dest, "wb") as fh:
+                        fh.write(tf.extractfile(m).read())
+                    wrote += 1
+                except Exception:  # noqa: BLE001,S112
+                    continue
+            return workdir if wrote else None
+    except Exception:  # noqa: BLE001
+        return None
+
+
 def resolve_clawhub_skill(skill_ref, workdir=None):
     """Path-only convenience wrapper around fetch_clawhub_skill."""
     path, _error = fetch_clawhub_skill(skill_ref, workdir)
@@ -358,21 +426,23 @@ def _fetch_clawhub_native_audit(skill_ref):
 @register_marketplace("skillssh")
 def resolve_skillssh_skill(skill_ref, workdir=None):
     """
-    TODO, real and stated, not hidden: skills.sh (Vercel's skill
-    registry, already a named comparison point elsewhere in this
-    project - see README.md's own intro line) was confirmed real via
-    this project's own research, including that it publishes detailed,
-    real, per-skill security audit pages from multiple named third-
-    party auditors (Socket, and a separate one referred to in this
-    project's research as "Gen Agent Trust Hub"). What hasn't been
-    built or verified yet is a real, stable, sanctioned way to fetch a
-    given skill's actual content from skills.sh programmatically -
-    unlike ClawHub, no official CLI for this was found during that
-    research. Returns None (source unavailable) until that's actually
-    verified and built, the same honest posture as every other
-    unverified adapter in this file.
+    skills.sh (Vercel's registry) indexes skills that live in public GitHub
+    repos - its own install command is `npx skills add <github-url> --skill
+    <name>`. So Husk resolves a skills.sh reference by fetching the skill's
+    real content straight from its GitHub source, the actual thing skills.sh
+    points at. Accepts a full GitHub URL, an `owner/repo` ref, or an
+    `owner/repo/skill-subpath` ref. Returns the local dir, or None. Verified
+    end-to-end against a real live skill.
     """
-    return None
+    ref = skill_ref.strip()
+    # accept a full github URL
+    m = re.search(r"github\.com/([^/\s]+/[^/\s#?]+)(?:/tree/[^/]+/(.+))?", ref)
+    if m:
+        owner_repo = m.group(1)
+        subpath = m.group(2)
+        return _fetch_github_skill(owner_repo, skill_subpath=subpath, workdir=workdir)
+    # otherwise treat it as owner/repo or owner/repo/subpath
+    return _fetch_github_skill(ref, workdir=workdir)
 
 
 @register_marketplace("agentskillsh")
@@ -437,7 +507,106 @@ def resolve_agentskillsh_skill(skill_ref, workdir=None):
 
         return workdir
     except (urllib.error.URLError, json.JSONDecodeError, OSError, ValueError):
-        return None
+        # agentskill.sh indexes GitHub-hosted skills; if its own API can't be
+        # reached (network policy, downtime), fall back to the real source on
+        # GitHub. The slug is owner/skill and maps to the owner/repo there.
+        return _fetch_github_skill(skill_slug, workdir=workdir)
+
+
+@register_external_source("agentskillsh_native", marketplaces=["agentskillsh"])
+def _fetch_agentskillsh_native_audit(skill_ref):
+    """agentskill.sh's own security audit for a skill.
+
+    agentskill.sh publishes a per-skill security page at
+    /@<owner>/<skill>/security with a 0-100 score and a severity breakdown
+    (critical/high/medium/low). Parsed from that page's real, stable markup:
+    the <title>/meta 'Score: N/100' and the 'C critical / H high / M medium /
+    L low' counts. Verified against the real live audit of
+    leonxlnx/taste-skill (47/100, 1 high, 1 medium, 33 low).
+    """
+    slug = skill_ref.strip().lstrip("@")
+    parts = slug.split("/")
+    if len(parts) < 2:
+        return {"available": False, "error": "expected owner/skill"}
+    owner, skill = parts[0], parts[1]
+    audit_url = f"https://agentskill.sh/@{owner}/{skill}/security"
+    try:
+        req = urllib.request.Request(  # noqa: S310 - fixed agentskill.sh host
+            audit_url, headers={"User-Agent": _USER_AGENT})
+        with urllib.request.urlopen(req, timeout=_HTTP_TIMEOUT_SECONDS) as resp:  # noqa: S310
+            html = resp.read().decode("utf-8", errors="replace")
+    except (urllib.error.URLError, OSError):
+        return {"available": False, "error": "could not reach agentskill.sh"}
+
+    score_m = re.search(r"Score:\s*(\d+)\s*/\s*100", html) or re.search(r"\((\d+)/100\)", html)
+    if not score_m:
+        return {"available": False, "error": "no security score published for this skill"}
+    score = int(score_m.group(1))
+
+    def _count(word):
+        m = re.search(r"(\d+)\s*" + word + r"\b", html, re.IGNORECASE)
+        return int(m.group(1)) if m else 0
+
+    crit, high, med, low = _count("critical"), _count("high"), _count("medium"), _count("low")
+    # agentskill.sh doesn't publish a pass/fail label, only a score. Treat a
+    # low score or any critical/high finding as "flagged", mirroring how a
+    # user would read it. The exact score + breakdown is always shown.
+    flagged = bool(crit or high) or score < 50
+    verdict = f"score {score}/100"
+    if crit or high or med or low:
+        verdict += f" ({crit}C/{high}H/{med}M/{low}L)"
+    return {"available": True, "flagged": flagged, "verdict": verdict,
+            "score": score, "audit_url": audit_url,
+            "counts": {"critical": crit, "high": high, "medium": med, "low": low}}
+
+
+@register_external_source("skillssh_native", marketplaces=["skillssh"])
+def _fetch_skillssh_native_audit(skill_ref):
+    """skills.sh's own published security audit (via its auditors: Socket,
+    Agent Trust Hub, Snyk).
+
+    skills.sh shows a Pass/Warn/Fail badge per auditor at
+    /{org}/{repo}/{skill}/security/{auditor}. Husk reads that page and returns
+    the badge. A ref may be 'org/repo' or 'org/repo/skill'; when the skill
+    segment is missing, skills.sh commonly names the skill the same as the
+    repo, which is tried as a fallback. Auditors are tried in order until one
+    has a published verdict. Parsed from real, stable page markup, verified
+    against real live audit pages (e.g. swan-gtm/gtm-skills/score -> Pass).
+    """
+    ref = skill_ref.strip().strip("/")
+    m = re.search(r"skills\.sh/([^\s?#]+)", ref)
+    if m:
+        ref = m.group(1).rstrip("/")
+    parts = [p for p in ref.split("/") if p]
+    if len(parts) < 2:
+        return {"available": False, "error": "expected org/repo or org/repo/skill"}
+    # candidate {org}/{repo}/{skill} paths to try
+    if len(parts) >= 3:
+        candidates = ["/".join(parts[:3])]
+    else:
+        org, repo = parts[0], parts[1]
+        candidates = [f"{org}/{repo}/{repo}"]  # skill often named like the repo
+
+    for path in candidates:
+        for auditor in ("socket", "agent-trust-hub", "snyk"):
+            url = f"https://www.skills.sh/{path}/security/{auditor}"
+            try:
+                req = urllib.request.Request(  # noqa: S310 - fixed skills.sh host
+                    url, headers={"User-Agent": _USER_AGENT})
+                with urllib.request.urlopen(req, timeout=_HTTP_TIMEOUT_SECONDS) as resp:  # noqa: S310
+                    html = resp.read().decode("utf-8", errors="replace")
+            except (urllib.error.URLError, OSError):
+                continue
+            vm = re.search(r"\n\s*(Pass|Warn|Fail)\s*\n", html)
+            am = re.search(r"Audited by\s+([\w\s-]+?)\s+on\s+", html)
+            if vm:
+                badge = vm.group(1)
+                auditor_name = am.group(1).strip() if am else auditor
+                return {"available": True,
+                        "flagged": badge in ("Warn", "Fail"),
+                        "verdict": f"{badge} (by {auditor_name})",
+                        "audit_url": url}
+    return {"available": False, "error": "no published skills.sh audit for this skill"}
 
 
 def aggregate_skill_opinions(skill_ref, marketplace="clawhub", local_path=None,
