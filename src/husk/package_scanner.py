@@ -20,6 +20,7 @@ layers deep, using the same checks from skill_scanner.py.
 """
 
 import os
+import shutil
 import sys
 import tempfile
 import zipfile
@@ -40,6 +41,42 @@ ARCHIVE_SIGNATURES = {
 }
 
 MAX_RECURSION_DEPTH = 5  # guard against zip bombs / infinite nesting
+
+MAX_ARCHIVE_EXPANDED_BYTES = 50 * 1024 * 1024  # per archive, uncompressed
+MAX_ARCHIVE_MEMBERS = 5000
+MAX_TOTAL_EXPANDED_BYTES = 150 * 1024 * 1024  # across all nested archives in one scan
+
+
+class ArchiveTooLarge(Exception):
+    """Raised when an archive would expand past the safety limits."""
+
+
+def _inside(root, target):
+    root = os.path.realpath(root)
+    return os.path.realpath(target).startswith(root + os.sep)
+
+
+def safe_extract_zip(zf, dest, max_bytes=MAX_ARCHIVE_EXPANDED_BYTES, max_members=MAX_ARCHIVE_MEMBERS):
+    """Extract an untrusted ZIP without letting it exhaust disk or memory.
+
+    Checks the declared uncompressed sizes up front (zipfile never yields
+    more bytes than a member declares, so the sum is a hard upper bound),
+    caps the member count, and skips any path that would land outside dest.
+    """
+    infos = [i for i in zf.infolist() if not i.is_dir()]
+    if len(infos) > max_members:
+        raise ArchiveTooLarge(f"{len(infos)} files (limit {max_members})")
+    total = sum(i.file_size for i in infos)
+    if total > max_bytes:
+        raise ArchiveTooLarge(f"{total // (1024 * 1024)} MB (limit {max_bytes // (1024 * 1024)} MB)")
+    for info in infos:
+        target = os.path.join(dest, info.filename)
+        if not _inside(dest, target):
+            continue
+        os.makedirs(os.path.dirname(target), exist_ok=True)
+        with zf.open(info) as src, open(target, "wb") as out:
+            shutil.copyfileobj(src, out)
+
 
 
 def detect_real_file_type(path):
@@ -62,12 +99,14 @@ PACKAGE_SCANNABLE_EXTENSIONS = (
 )
 
 
-def scan_package(root_path, depth=0, findings=None):
+def scan_package(root_path, depth=0, findings=None, _budget=None, max_archive_bytes=None):
     """
     Walks a directory (or extracted archive), flags any file whose real
     type doesn't match a plain-text expectation, recurses into nested
     archives, and runs the existing text-based checks on real content.
     """
+    if _budget is None:
+        _budget = {"bytes": MAX_TOTAL_EXPANDED_BYTES if max_archive_bytes is None else max_archive_bytes}
     if findings is None:
         findings = []
 
@@ -137,10 +176,14 @@ def scan_package(root_path, depth=0, findings=None):
                     try:
                         with tempfile.TemporaryDirectory() as tmp:
                             with zipfile.ZipFile(full_path) as zf:
-                                zf.extractall(tmp)
-                            scan_package(tmp, depth=depth + 1, findings=findings)
+                                safe_extract_zip(zf, tmp, max_bytes=min(MAX_ARCHIVE_EXPANDED_BYTES, _budget["bytes"]))
+                                _budget["bytes"] -= sum(i.file_size for i in zf.infolist())
+                            scan_package(tmp, depth=depth + 1, findings=findings, _budget=_budget)
                     except zipfile.BadZipFile:
                         findings.append(f"'{rel_path}' claims to be a ZIP but is malformed - treat as suspicious.")
+                    except ArchiveTooLarge as e:
+                        findings.append(f"'{rel_path}' is an archive that expands to {e} - "
+                                        "a zip-bomb pattern; its contents were not unpacked.")
                 # (gzip/7z/rar extraction can be added the same way as needed)
 
             elif name.lower().endswith(".pdf"):

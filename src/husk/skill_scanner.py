@@ -29,6 +29,14 @@ file with an LLM (which would just recreate the same weakness):
 """
 
 import base64
+
+# ---- linear-time position helpers -------------------------------------
+# Many checks report a line number or look back for context (negations,
+# comments) for EVERY regex match. Doing that by re-reading the text from the
+# start each time is quadratic: a file with thousands of matches on one long
+# line took minutes. These keep it linear.
+import bisect as _bisect
+import functools as _functools
 import itertools
 import os
 import re
@@ -38,6 +46,30 @@ import unicodedata
 from .js_taint_analysis import analyze_js_taint
 from .taint_analysis import analyze_taint_flows
 
+_MAX_MATCHES_PER_CHECK = 500  # per rule; a real skill never gets close
+_LOOKBACK = 4096  # context checks never need more than a few KB before a match
+
+
+@_functools.lru_cache(maxsize=8)
+def _newline_index(text):
+    return [m.start() for m in re.finditer("\n", text)]
+
+
+def _line_no(text, pos):
+    """1-based line number of pos, via binary search over a cached index."""
+    return _bisect.bisect_left(_newline_index(text), pos) + 1
+
+
+def _bounded_rfind(text, sub, pos, window=_LOOKBACK):
+    """text.rfind(sub, 0, pos), but never looking back more than `window`
+    characters. If nothing is found inside the window, returns the index that
+    makes `result + len(sub)` equal the window start, so callers' existing
+    `+ 1` / `+ 2` arithmetic lands on a bounded slice instead of position 0."""
+    lo = max(0, pos - window)
+    i = text.rfind(sub, lo, pos)
+    if i == -1 and lo > 0:
+        return lo - len(sub)
+    return i
 
 def is_invisible_or_blank(line):
     """
@@ -58,7 +90,7 @@ SUSPICIOUS_WHITESPACE_RUN = 50  # consecutive blank lines
 # Patterns worth flagging if found anywhere in the file - kept simple
 # and readable on purpose; this is a starting rule set to expand later.
 DANGEROUS_PATTERNS = [
-    (r"\bcurl\s+.*\|\s*(sh|bash)\b", "Pipes a downloaded script directly into a shell"),
+    (r"\bcurl\s+[^\n]{0,400}?\|\s*(sh|bash)\b", "Pipes a downloaded script directly into a shell"),
     (r"(?<!\.)\bexec\s*\(", "Uses exec() - runs code built at runtime"),
     (r"(?<!\.)\beval\s*\(", "Uses eval() - runs code built at runtime"),
     (r"base64\s+-d", "Decodes base64 - common way to hide a payload"),
@@ -183,16 +215,18 @@ def scan_for_dangerous_patterns(text):
     """
     findings = []
     for pattern, description in DANGEROUS_PATTERNS:
-        for match in re.finditer(pattern, text, re.IGNORECASE):
+        for k, match in enumerate(re.finditer(pattern, text, re.IGNORECASE)):
+            if k >= _MAX_MATCHES_PER_CHECK:
+                break  # thousands of repeats add nothing to the verdict, only CPU
             if _is_negated(text, match.start()):
                 continue
             if pattern in CALL_SYNTAX_ONLY_PATTERNS and _is_call_syntax_inside_comment_or_string(text, match.start()):
                 continue
             # Show which line it's on, so a human can go verify it directly.
-            line_num = text[:match.start()].count("\n") + 1
+            line_num = _line_no(text, match.start())
             marker = ""
             if description.startswith("Pipes a downloaded script"):
-                ls = text.rfind("\n", 0, match.start()) + 1
+                ls = _bounded_rfind(text, "\n", match.start()) + 1
                 le = text.find("\n", match.end())
                 le = le if le != -1 else len(text)
                 if _curl_pipe_host_is_trusted(text[ls:le]):
@@ -353,7 +387,7 @@ def _is_call_syntax_inside_comment_or_string(text, match_start):
     doesn't track multi-line triple-quoted strings. A real, honest,
     stated limitation, not silently assumed to be complete.
     """
-    line_start = text.rfind("\n", 0, match_start)
+    line_start = _bounded_rfind(text, "\n", match_start)
     line_start = line_start + 1 if line_start != -1 else 0
     line_so_far = text[line_start:match_start]
 
@@ -382,7 +416,7 @@ def _is_inside_line_comment(text, match_start):
     labeled one entry "// Direct instruction override attempts" - a
     comment describing what the tool detects, not an attack.
     """
-    line_start = text.rfind("\n", 0, match_start)
+    line_start = _bounded_rfind(text, "\n", match_start)
     line_start = line_start + 1 if line_start != -1 else 0
     line_so_far = text[line_start:match_start]
     return "#" in line_so_far or "//" in line_so_far
@@ -394,7 +428,7 @@ def _is_negated(text, match_start):
     current paragraph (nearest blank line) rather than a fixed window,
     since a negation like 'MUST NOT:' is often followed by a multi-line
     bullet list where the actual pattern appears several lines later."""
-    paragraph_start = text.rfind("\n\n", 0, match_start)
+    paragraph_start = _bounded_rfind(text, "\n\n", match_start)
     paragraph_start = paragraph_start + 2 if paragraph_start != -1 else 0
     preceding = text[paragraph_start:match_start].lower()
     return any(phrase in preceding for phrase in NEGATION_PHRASES)
@@ -415,14 +449,14 @@ def resolve_string_concatenation(text):
     var_map = {}
 
     # Pass 1: direct literal assignments
-    for m in re.finditer(r'(\w+)\s*=\s*"([^"]*)"', text):
+    for m in re.finditer(r'\b(\w++)\s*+=\s*+"([^"\n]{0,4000})"', text):
         var_map[m.group(1)] = m.group(2)
 
     # Pass 2 (run twice to allow one level of chaining, e.g. c = a + b
     # where a and b were themselves resolved in pass 1):
     for _ in range(2):
         for m in re.finditer(
-            r'(\w+)\s*=\s*((?:\w+|"[^"]*")(?:\s*\+\s*(?:\w+|"[^"]*"))+)', text
+            r'\b(\w++)\s*+=\s*+((?:\w++|"[^"\n]{0,4000}")(?:\s*+\+\s*+(?:\w++|"[^"\n]{0,4000}"))++)', text
         ):
             var_name, expr = m.group(1), m.group(2)
             tokens = re.findall(r'\w+|"[^"]*"', expr)
@@ -475,7 +509,7 @@ def find_split_base64(text):
     for match in re.finditer(rf"[A-Za-z0-9+/]{{{MIN_FRAGMENT_LEN},{MIN_SUSPICIOUS_B64_LENGTH - 1}}}={{0,2}}", text):
         if _is_part_of_url(text, match.start()) or _looks_like_path_not_base64(match.group(0)) or _looks_like_identifier_not_base64(match.group(0)) or _looks_like_hex_address_not_base64(text, match.start(), match.group(0)) or _is_sri_hash_not_base64(text, match.start()):
             continue
-        line_num = text[:match.start()].count("\n") + 1
+        line_num = _line_no(text, match.start())
         fragments.append((line_num, match.group(0)))
 
     if len(fragments) < 2:
@@ -551,7 +585,9 @@ def _looks_like_path_not_base64(candidate):
     """
     if "/" not in candidate:
         return False
-    segments = candidate.split("/")
+    # a sample of the first 500 segments decides this just as well, and keeps
+    # a multi-megabyte run of slashes from costing one regex call per slash
+    segments = candidate.split("/", 500)[:500]
     if len(segments) < 2:
         return False
     word_like = sum(1 for s in segments if re.fullmatch(r"[a-zA-Z][a-zA-Z0-9_\-]{1,20}", s))
@@ -630,7 +666,7 @@ def find_suspicious_base64(text):
         blob = match.group(0)
         if _is_part_of_url(text, match.start()) or _looks_like_path_not_base64(blob) or _looks_like_identifier_not_base64(blob) or _looks_like_hex_address_not_base64(text, match.start(), blob) or _is_sri_hash_not_base64(text, match.start()):
             continue
-        line_num = text[:match.start()].count("\n") + 1
+        line_num = _line_no(text, match.start())
         findings.append(
             f"Line {line_num}: large base64-like block ({len(blob)} chars) - "
             f"encoding text this way has no ordinary purpose in a skill file "
@@ -664,7 +700,7 @@ def find_bytecode_patterns(text):
         for match in re.finditer(pattern, text, re.IGNORECASE):
             if _is_negated(text, match.start()):
                 continue
-            line_num = text[:match.start()].count("\n") + 1
+            line_num = _line_no(text, match.start())
             findings.append(f"Line {line_num}: {description} ('{match.group(0).strip()}')")
     return findings
 
@@ -689,9 +725,12 @@ def find_hidden_instructions(text):
 
     # Both common hiding spots: markdown reference-style comments,
     # and standard HTML comments.
+    # (pattern, closing token). Searching only up to the LAST closing token is
+    # what keeps this linear: an opener after it can never match, and without
+    # the cut every unclosed opener would rescan the rest of the text (ReDoS).
     comment_patterns = [
-        r"\[//\]:\s*#\s*\(([^)]*)\)",
-        r"<!--(.*?)-->",
+        (r"\[//\]:\s*#\s*\(([^)]*)\)", ")"),
+        (r"<!--(.*?)-->", "-->"),
     ]
 
     # Category-based detection (catches paraphrasing, not just exact
@@ -699,10 +738,13 @@ def find_hidden_instructions(text):
     # ANY data-movement language is suspicious regardless of the exact
     # words used - this is what lets Husk catch intent, not just the
     # specific sentence from one published example.
-    for pattern in comment_patterns:
-        for match in re.finditer(pattern, text, re.IGNORECASE | re.DOTALL):
+    for pattern, closer in comment_patterns:
+        cut = text.rfind(closer)
+        if cut < 0:
+            continue
+        for match in re.finditer(pattern, text[: cut + len(closer)], re.IGNORECASE | re.DOTALL):
             comment_body = match.group(1)
-            line_num = text[:match.start()].count("\n") + 1
+            line_num = _line_no(text, match.start())
             lower_body = comment_body.lower()
 
             hit_phrases = [p for p in SUSPICIOUS_PHRASES if p in lower_body]
@@ -815,7 +857,7 @@ def find_credential_harvesting(text):
         match = re.search(cred_pattern, text, re.IGNORECASE)
         if not match:
             continue
-        line_num = text[:match.start()].count("\n") + 1
+        line_num = _line_no(text, match.start())
         is_high_confidence = cred_pattern in HIGH_CONFIDENCE_CREDENTIAL_PATTERNS
 
         # Precision fix (v1.1.4), measured on the live ClawHub set where this
@@ -955,9 +997,9 @@ def find_exfiltration_chain(text):
                 window_text = text[window_start:window_end].lower()
                 if "attachment" in window_text or "attach" in window_text:
                     continue
-                read_line = text[:r.start()].count("\n") + 1
-                encode_line = text[:e.start()].count("\n") + 1
-                send_line = text[:s.start()].count("\n") + 1
+                read_line = _line_no(text, r.start())
+                encode_line = _line_no(text, e.start())
+                send_line = _line_no(text, s.start())
                 findings.append(
                     f"Exfiltration chain detected: file read (line {read_line}) -> "
                     f"base64 encode (line {encode_line}) -> network send (line {send_line}), "
@@ -1006,11 +1048,11 @@ def find_fake_prerequisite_socialengineering(text):
     # sample using a plain `wget https://.../agent-helper.tar.gz`
     # command (no markdown link syntax, .tar.gz not in the original
     # extension list).
-    EXE_DOWNLOAD_LINK_PATTERN = r"(\[.*?\]\(https?://[^\)]+\.(zip|exe)\)|(?:wget|curl)\s+[\"']?https?://[^\s\"']+\.(zip|exe|tar\.gz|tgz))"
+    EXE_DOWNLOAD_LINK_PATTERN = r"(\[[^\[\]\n]{0,500}+\]\(https?://[^)\s]{1,2000}\.(zip|exe)\)|(?:wget|curl)\s++[\"']?https?://[^\s\"']{1,2000}\.(zip|exe|tar\.gz|tgz))"
 
     # Sub-pattern 1: paste-site + terminal execution instruction
     for match in re.finditer(PASTE_SITE_PATTERN, text, re.IGNORECASE):
-        line_num = text[:match.start()].count("\n") + 1
+        line_num = _line_no(text, match.start())
         # look at surrounding text (~150 chars) for a terminal-execution cue
         window = text[max(0, match.start() - 150):match.end() + 150]
         if re.search(TERMINAL_ACTION_PATTERN, window, re.IGNORECASE):
@@ -1024,7 +1066,7 @@ def find_fake_prerequisite_socialengineering(text):
 
     # Sub-pattern 2: password-protected archive extraction
     for match in re.finditer(PASSWORD_ARCHIVE_PATTERN, text, re.IGNORECASE):
-        line_num = text[:match.start()].count("\n") + 1
+        line_num = _line_no(text, match.start())
         findings.append(
             f"Line {line_num}: password-protected archive extraction "
             f"instructions ('{match.group(0).strip()[:80]}') - a trivial "
@@ -1038,7 +1080,7 @@ def find_fake_prerequisite_socialengineering(text):
     exe_links = list(re.finditer(EXE_DOWNLOAD_LINK_PATTERN, text, re.IGNORECASE))
     if has_require_framing and exe_links:
         for match in exe_links:
-            line_num = text[:match.start()].count("\n") + 1
+            line_num = _line_no(text, match.start())
             findings.append(
                 f"Line {line_num}: skill claims a 'required utility' must be "
                 f"downloaded and run before the skill works, linking directly "
@@ -1086,7 +1128,7 @@ def find_instruction_override(text):
                 continue
             if _is_inside_line_comment(text, match.start()):
                 continue
-            line_num = text[:match.start()].count("\n") + 1
+            line_num = _line_no(text, match.start())
             findings.append(
                 f"Line {line_num}: overt instruction-override language "
                 f"('{match.group(0)}') - found in plain visible text, not "
@@ -1137,7 +1179,7 @@ def find_overt_secrecy_language(text):
             # small, honest recall tradeoff (a real attack sentence
             # hard-wrapped across two lines could be missed) in exchange
             # for not flagging ordinary documentation constantly.
-            line_start = text.rfind("\n", 0, match.start())
+            line_start = _bounded_rfind(text, "\n", match.start())
             line_start = line_start + 1 if line_start != -1 else 0
             line_end = text.find("\n", match.end())
             line_end = line_end if line_end != -1 else len(text)
@@ -1153,7 +1195,7 @@ def find_overt_secrecy_language(text):
             if not action_hits:
                 continue  # secrecy word alone, no action nearby - too common to flag
 
-            line_num = text[:match.start()].count("\n") + 1
+            line_num = _line_no(text, match.start())
             findings.append(
                 f"Line {line_num}: overt secrecy language ('{phrase}') "
                 f"combined with a data-movement action ({action_hits[0]}) "
@@ -1226,7 +1268,7 @@ def find_exfil_to_raw_ip(text):
     for match in re.finditer(pattern, text, re.IGNORECASE):
         if _is_private_ip(match.group(1)):
             continue
-        line_num = text[:match.start()].count("\n") + 1
+        line_num = _line_no(text, match.start())
         findings.append(
             f"Line {line_num}: hardcoded URL targets a bare IP address "
             f"({match.group(1)}) rather than a domain name - legitimate "
@@ -1251,7 +1293,7 @@ def find_exfil_to_raw_ip(text):
         window_end = min(len(text), match.end() + 300)
         window = text[window_start:window_end]
         if re.search(connection_context, window):
-            line_num = text[:match.start()].count("\n") + 1
+            line_num = _line_no(text, match.start())
             findings.append(
                 f"Line {line_num}: bare IP address ({match.group(1)}) used "
                 f"near a low-level network connection call - the same C2 "
@@ -1278,7 +1320,7 @@ def find_dropper_pattern(text):
     findings = []
     pattern = r"\.write\s*\(\s*b['\"]MZ"
     for match in re.finditer(pattern, text):
-        line_num = text[:match.start()].count("\n") + 1
+        line_num = _line_no(text, match.start())
         findings.append(
             f"Line {line_num}: writes bytes starting with 'MZ' - the "
             f"actual magic-byte signature of a Windows PE executable - "
@@ -1289,7 +1331,7 @@ def find_dropper_pattern(text):
     # Also catch executable extensions written via tempfile paths
     exe_write_pattern = r"(tempfile\.gettempdir\(\)|temp_dir)[^\n]{0,80}\.(exe|dll|scr|bat|ps1)"
     for match in re.finditer(exe_write_pattern, text, re.IGNORECASE):
-        line_num = text[:match.start()].count("\n") + 1
+        line_num = _line_no(text, match.start())
         findings.append(
             f"Line {line_num}: builds a path to an executable file "
             f"('{match.group(0)[:60]}') inside the system temp "
@@ -1315,7 +1357,7 @@ def find_subprocess_network_exfil(text):
     findings = []
     pattern = r"subprocess\.(Popen|call|run|check_output|check_call)\s*\(\s*\[\s*[\"'](curl|wget|nc|netcat)[\"']"
     for match in re.finditer(pattern, text, re.IGNORECASE):
-        line_num = text[:match.start()].count("\n") + 1
+        line_num = _line_no(text, match.start())
         findings.append(
             f"Line {line_num}: subprocess call directly invokes "
             f"'{match.group(2)}' ('{match.group(0)}') - a real way to send "
@@ -1348,7 +1390,7 @@ def find_shell_true_subprocess(text):
         if re.search(r"shell\s*=\s*True", window):
             if _is_negated(text, match.start()):
                 continue
-            line_num = text[:match.start()].count("\n") + 1
+            line_num = _line_no(text, match.start())
             findings.append(
                 f"Line {line_num}: subprocess.{match.group(1)}(...) uses "
                 f"shell=True - the specific configuration that opens "
@@ -1385,7 +1427,7 @@ def find_permission_escalation(text):
     for match in re.finditer(pattern, text, re.IGNORECASE):
         if _is_negated(text, match.start()):
             continue
-        line_num = text[:match.start()].count("\n") + 1
+        line_num = _line_no(text, match.start())
         findings.append(
             f"Line {line_num}: sets world-writable/executable permissions "
             f"('{match.group(0)}') - legitimate skills essentially never "
@@ -1401,7 +1443,7 @@ def find_permission_escalation(text):
     for match in re.finditer(suid_pattern, text, re.IGNORECASE):
         if _is_negated(text, match.start()):
             continue
-        line_num = text[:match.start()].count("\n") + 1
+        line_num = _line_no(text, match.start())
         findings.append(
             f"Line {line_num}: sets the SUID/SGID bit via a shelled-out "
             f"chmod command (mode '{match.group(1)}') - a file with this "
@@ -1424,11 +1466,11 @@ def _nearest_match_within(text, marker_match, other_pattern, window_lines=25):
     proximity removed the bulk of these rules' false positives while
     keeping every real exfil-chain catch, which by nature sits close
     together."""
-    marker_line = text[:marker_match.start()].count("\n")
+    marker_line = (_line_no(text, marker_match.start()) - 1)
     lo = marker_line - window_lines
     hi = marker_line + window_lines
     for m in re.finditer(other_pattern, text, re.IGNORECASE):
-        ln = text[:m.start()].count("\n")
+        ln = (_line_no(text, m.start()) - 1)
         if lo <= ln <= hi:
             return True
     return False
@@ -1462,7 +1504,7 @@ def find_agent_identity_exfiltration(text):
         # identity/memory exfiltration pattern this check targets -
         # caused 5 false positives in a 60-sample check alone.
     ]
-    NETWORK_SEND = r"(curl\s+.*-X\s*POST|requests\.post\s*\(|\.send\s*\(|fetch\s*\()"
+    NETWORK_SEND = r"(curl\s+[^\n]{0,400}?-X\s*POST|requests\.post\s*\(|\.send\s*\(|fetch\s*\()"
 
     if not re.search(NETWORK_SEND, text, re.IGNORECASE):
         return findings
@@ -1470,7 +1512,7 @@ def find_agent_identity_exfiltration(text):
     for fname in IDENTITY_FILES:
         match = re.search(re.escape(fname), text)
         if match and _nearest_match_within(text, match, NETWORK_SEND):
-            line_num = text[:match.start()].count("\n") + 1
+            line_num = _line_no(text, match.start())
             findings.append(
                 f"Line {line_num}: references '{fname}' (an agent "
                 f"identity/memory file) alongside network-send capability "
@@ -1512,14 +1554,14 @@ def find_wallet_credential_harvesting(text):
         r"chrome.{0,20}cookies.{0,20}\.dump",
     ]
     ARCHIVE_TO_NETWORK = r"tar\s+cz?f?\s*-.{0,80}\|\s*curl"
-    NETWORK_SEND = r"(curl\s+.*-X\s*POST|requests\.post\s*\(|\.send\s*\(|fetch\s*\()"
+    NETWORK_SEND = r"(curl\s+[^\n]{0,400}?-X\s*POST|requests\.post\s*\(|\.send\s*\(|fetch\s*\()"
 
     net_re = f"({NETWORK_SEND}|{ARCHIVE_TO_NETWORK})"
     if re.search(net_re, text, re.IGNORECASE):
         for pattern in WALLET_MARKERS:
             match = re.search(pattern, text, re.IGNORECASE)
             if match and _nearest_match_within(text, match, net_re):
-                line_num = text[:match.start()].count("\n") + 1
+                line_num = _line_no(text, match.start())
                 findings.append(
                     f"Line {line_num}: references a browser cryptocurrency "
                     f"wallet extension ('{match.group(0)}') alongside "
@@ -1532,7 +1574,7 @@ def find_wallet_credential_harvesting(text):
         for pattern in BROWSER_CRED_MARKERS:
             match = re.search(pattern, text, re.IGNORECASE)
             if match and _nearest_match_within(text, match, net_re):
-                line_num = text[:match.start()].count("\n") + 1
+                line_num = _line_no(text, match.start())
                 findings.append(
                     f"Line {line_num}: queries a browser's internal "
                     f"password/cookie database schema ('{match.group(0)[:50]}') "
@@ -1581,7 +1623,7 @@ def find_safety_bypass_instruction(text):
         for match in re.finditer(pattern, text, re.IGNORECASE | re.MULTILINE):
             if _is_negated(text, match.start()):
                 continue
-            line_num = text[:match.start()].count("\n") + 1
+            line_num = _line_no(text, match.start())
             findings.append(
                 f"Line {line_num}: instructs disabling the agent's own "
                 f"safety confirmations ('{match.group(0)}') - a self-"
@@ -1626,7 +1668,7 @@ def find_unicode_steganography(text):
         is_bidi = any(lo <= code <= hi for lo, hi in BIDI_OVERRIDE_RANGES)
         is_tag = TAG_UNICODE_RANGE[0] <= code <= TAG_UNICODE_RANGE[1]
         if is_bidi or is_tag:
-            line_num = text[:i].count("\n") + 1
+            line_num = _line_no(text, i)
             kind = "bidirectional-override" if is_bidi else "Unicode tag"
             findings.append(
                 f"Line {line_num}: contains a {kind} character "
@@ -1721,7 +1763,7 @@ def find_system_persistence_write(text):
             window_end = min(len(text), match.end() + 300)
             window = text[window_start:window_end]
             if re.search(WRITE_CONTEXT, window):
-                line_num = text[:match.start()].count("\n") + 1
+                line_num = _line_no(text, match.start())
                 findings.append(
                     f"Line {line_num}: writes to a system-level, root-"
                     f"required persistence location ('{match.group(0)}') "
@@ -1775,7 +1817,7 @@ def find_ransom_note_pattern(text):
         window = text[window_start:window_end]
         demand_match = re.search(DEMAND_TERMS, window, re.IGNORECASE)
         if demand_match:
-            line_num = text[:match.start()].count("\n") + 1
+            line_num = _line_no(text, match.start())
             findings.append(
                 f"Line {line_num}: cryptocurrency payment-demand language "
                 f"('{match.group(0)}' near '{demand_match.group(0)}') - "
@@ -1811,7 +1853,7 @@ def find_reverse_shell_pattern(text):
     for match in re.finditer(pattern, text, re.IGNORECASE):
         if _is_negated(text, match.start()):
             continue
-        line_num = text[:match.start()].count("\n") + 1
+        line_num = _line_no(text, match.start())
         findings.append(
             f"Line {line_num}: redirects a file descriptor to a socket's "
             f"fileno() via os.dup2() - the canonical reverse-shell "
@@ -1841,7 +1883,7 @@ def find_shell_credential_substitution(text):
     for match in re.finditer(pattern, text, re.IGNORECASE):
         if _is_negated(text, match.start()):
             continue
-        line_num = text[:match.start()].count("\n") + 1
+        line_num = _line_no(text, match.start())
         findings.append(
             f"Line {line_num}: shell command substitution reads a "
             f"credential-shaped file directly ('{match.group(0)[:70]}') - "
@@ -1883,7 +1925,7 @@ def find_self_modification_pattern(text):
     skill_md_write = re.search(SKILL_MD_WRITE, text, re.IGNORECASE)
 
     if skill_md_write:
-        line_num = text[:skill_md_write.start()].count("\n") + 1
+        line_num = _line_no(text, skill_md_write.start())
         findings.append(
             f"Line {line_num}: writes to its own SKILL.md definition "
             f"file - a skill rewriting its own instructions is a well-"
@@ -1893,7 +1935,7 @@ def find_self_modification_pattern(text):
     elif has_reload:
         write_match = re.search(WRITE_TO_CODE, text, re.IGNORECASE)
         if write_match:
-            line_num = text[:write_match.start()].count("\n") + 1
+            line_num = _line_no(text, write_match.start())
             findings.append(
                 f"Line {line_num}: writes to a code file and also uses "
                 f"dynamic module reloading/execution elsewhere in the "
@@ -1947,7 +1989,7 @@ def find_capability_declaration_mismatch(text):
             continue
         behavior_match = re.search(behavior_pattern, text, re.IGNORECASE)
         if behavior_match:
-            line_num = text[:behavior_match.start()].count("\n") + 1
+            line_num = _line_no(text, behavior_match.start())
             findings.append(
                 f"Line {line_num}: performs {capability_name} "
                 f"('{behavior_match.group(0)[:40]}') but this is not "
@@ -1979,7 +2021,7 @@ def find_markdown_image_beacon(text):
     findings = []
     pattern = r"!\[[^\]]*\]\(https?://[^)]+\?(?:[^)]*)(?:data|dump|exfil|token|key)=\{?[a-zA-Z_][\w-]*\}?[^)]*\)"
     for match in re.finditer(pattern, text, re.IGNORECASE):
-        line_num = text[:match.start()].count("\n") + 1
+        line_num = _line_no(text, match.start())
         findings.append(
             f"Line {line_num}: markdown image URL contains an "
             f"interpolated data placeholder ('{match.group(0)[:80]}') - "
@@ -2015,7 +2057,7 @@ def find_npm_install_hook_bootstrap(text):
     for pattern, desc in [(shell_bootstrap, "downloads/runs a remote script"),
                           (node_eval, "runs inline Node code via node -e/--eval")]:
         for match in pattern.finditer(text):
-            line_num = text[:match.start()].count("\n") + 1
+            line_num = _line_no(text, match.start())
             findings.append(
                 f"Line {line_num}: package.json preinstall/postinstall "
                 f"hook {desc} ('{match.group(0)[:90]}') - this runs "
@@ -2046,7 +2088,7 @@ def find_dns_covert_channel(text):
         re.IGNORECASE,
     )
     for match in pattern.finditer(text):
-        line_num = text[:match.start()].count("\n") + 1
+        line_num = _line_no(text, match.start())
         findings.append(
             f"Line {line_num}: DNS lookup with a multi-label subdomain "
             f"('{match.group(0)[:70]}') - a well-known covert-channel "
@@ -2091,7 +2133,7 @@ def find_sql_injection_pattern(text):
     for match in pattern.finditer(text):
         if _is_negated(text, match.start()):
             continue
-        line_num = text[:match.start()].count("\n") + 1
+        line_num = _line_no(text, match.start())
         findings.append(
             f"Line {line_num}: SQL query built with an f-string/string-"
             f"concatenation passed directly to "
@@ -2110,7 +2152,7 @@ def find_sql_injection_pattern(text):
     for match in return_query_pattern.finditer(text):
         if _is_negated(text, match.start()):
             continue
-        line_num = text[:match.start()].count("\n") + 1
+        line_num = _line_no(text, match.start())
         findings.append(
             f"Line {line_num}: an f-string containing a SQL keyword and "
             f"an interpolated value is returned from a function "
@@ -2142,7 +2184,7 @@ def find_sensitive_data_logging(text):
     for match in pattern.finditer(text):
         if _is_negated(text, match.start()):
             continue
-        line_num = text[:match.start()].count("\n") + 1
+        line_num = _line_no(text, match.start())
         findings.append(
             f"{SOFT_FINDING_MARKER}Line {line_num}: logs a variable whose name suggests a "
             f"credential ('{match.group(1)}') via an f-string "
@@ -2171,7 +2213,7 @@ def find_macos_jxa_execution(text):
         re.IGNORECASE,
     )
     for match in pattern.finditer(text):
-        line_num = text[:match.start()].count("\n") + 1
+        line_num = _line_no(text, match.start())
         findings.append(
             f"{SOFT_FINDING_MARKER}Line {line_num}: macOS osascript JavaScript-for-Automation "
             f"execution ('{match.group(0)[:70]}') - grants arbitrary "
@@ -2209,7 +2251,7 @@ def find_container_privilege_escalation(text):
     for pattern, desc in [(docker_socket, "mounts the Docker socket into a container - grants root-equivalent host access via the host's own Docker daemon"),
                           (privileged, "runs a container with elevated privileges/capabilities - defeats normal container isolation")]:
         for match in pattern.finditer(text):
-            line_num = text[:match.start()].count("\n") + 1
+            line_num = _line_no(text, match.start())
             findings.append(
                 f"Line {line_num}: {desc} ('{match.group(0)[:60]}')."
             )
@@ -2268,7 +2310,7 @@ def find_write_then_execute_instruction(text):
         path = next((g for g in match.groups() if g), None)
         if not path:
             continue
-        line_num = text[:match.start()].count("\n") + 1
+        line_num = _line_no(text, match.start())
         write_targets.setdefault(path, line_num)
         write_spans.setdefault(path, match.span())
 
@@ -2296,7 +2338,7 @@ def find_write_then_execute_instruction(text):
                 continue
             window = text[max(0, occ.start() - 120):min(len(text), occ.end() + 120)]
             if re.search(execute_verb_pattern, window, re.IGNORECASE):
-                exec_line = text[:occ.start()].count("\n") + 1
+                exec_line = _line_no(text, occ.start())
                 if exec_line == write_line:
                     continue
                 findings.append(
@@ -2348,7 +2390,7 @@ def find_dynamic_code_compilation(text):
     for match in pattern.finditer(text):
         if _is_negated(text, match.start()):
             continue
-        line_num = text[:match.start()].count("\n") + 1
+        line_num = _line_no(text, match.start())
         findings.append(
             f"Line {line_num}: compile() is called with a variable "
             f"('{match.group(1)}', not a literal string) in "
@@ -2467,14 +2509,14 @@ def find_hardcoded_secret_literal(text):
             # markdown table row (2+ pipe characters on the same line)
             # is itself a strong, clean signal this is a reference
             # table, not an embedded credential.
-            line_start = text.rfind("\n", 0, match.start())
+            line_start = _bounded_rfind(text, "\n", match.start())
             line_start = line_start + 1 if line_start != -1 else 0
             line_end = text.find("\n", match.end())
             line_end = line_end if line_end != -1 else len(text)
             if text[line_start:line_end].count("|") >= 2:
                 continue
 
-            line_num = text[:match.start()].count("\n") + 1
+            line_num = _line_no(text, match.start())
             findings.append(
                 f"Line {line_num}: a literal value matching the format "
                 f"of a {label} appears directly in this file "
@@ -2513,7 +2555,7 @@ def find_imperative_action_concealment(text):
     for match in pattern.finditer(text):
         if _is_negated(text, match.start()):
             continue
-        line_num = text[:match.start()].count("\n") + 1
+        line_num = _line_no(text, match.start())
         findings.append(
             f"Line {line_num}: bare imperative instruction to conceal an "
             f"action from the user ('{match.group(0)}') - a legitimate "
@@ -2551,7 +2593,7 @@ def find_untrusted_remote_package_install(text):
     for match in pattern.finditer(text):
         if _is_negated(text, match.start()):
             continue
-        line_num = text[:match.start()].count("\n") + 1
+        line_num = _line_no(text, match.start())
         findings.append(
             f"Line {line_num}: installs a package directly from a raw "
             f"archive URL rather than a registry package name "
@@ -2619,7 +2661,7 @@ def find_unconstrained_path_read(text):
         omatch = open_pattern.search(body)
         if not omatch:
             continue
-        line_num = text[:fmatch.start() + omatch.start()].count("\n") + 1
+        line_num = _line_no(text, fmatch.start() + omatch.start())
         findings.append(
             f"Line {line_num}: a function parameter explicitly named/"
             f"typed as a path ('{param_name}: str') is passed directly "
@@ -2683,7 +2725,7 @@ def find_unbounded_cpu_loop(text):
         trailing_window = text[match.end():match.end() + 200]
         if exit_signal_pattern.search(body) or exit_signal_pattern.search(trailing_window):
             continue
-        line_num = text[:match.start()].count("\n") + 1
+        line_num = _line_no(text, match.start())
         findings.append(
             f"Line {line_num}: 'while True:' loop with no break, sleep/"
             f"wait, or yield/await anywhere in its body - a tight, "
@@ -2749,7 +2791,7 @@ def find_tunnel_service_endpoint(text):
         window = text[max(0, match.start() - 150):min(len(text), match.end() + 150)]
         if doc_context_pattern.search(window):
             continue
-        line_num = text[:match.start()].count("\n") + 1
+        line_num = _line_no(text, match.start())
         findings.append(
             f"Line {line_num}: endpoint points at a tunneling-service "
             f"domain ('{match.group(0)[:70]}') rather than a real, "
@@ -2798,7 +2840,7 @@ def find_exfil_testbed_endpoint(text):
     for match in _EXFIL_TESTBED_DOMAINS.finditer(text):
         if _is_negated(text, match.start()):
             continue
-        line_num = text[:match.start()].count("\n") + 1
+        line_num = _line_no(text, match.start())
         findings.append(
             f"Line {line_num}: endpoint points at an out-of-band "
             f"interaction/exfiltration testbed domain "
@@ -2843,7 +2885,7 @@ def find_staged_code_execution(text):
         for match in pattern.finditer(text):
             if _is_negated(text, match.start()):
                 continue
-            line_num = text[:match.start()].count("\n") + 1
+            line_num = _line_no(text, match.start())
             findings.append(
                 f"Line {line_num}: {why} ('{match.group(0)[:60].strip()}')"
             )
@@ -2893,7 +2935,7 @@ def find_cloud_metadata_ssrf(text):
     for match in _CLOUD_METADATA_SSRF.finditer(text):
         if _is_negated(text, match.start()):
             continue
-        line_num = text[:match.start()].count("\n") + 1
+        line_num = _line_no(text, match.start())
         findings.append(
             f"Line {line_num}: fetches the cloud instance-metadata endpoint "
             f"('{match.group(0)[:55].strip()}') - the standard SSRF path to a "
@@ -2993,7 +3035,7 @@ def _jb_is_example(text, match):
     """True if the match is a quoted/truncated example rather than a live
     instruction (\"disregard your safety guidelines...\", a code-comment
     example, a bullet of quoted attack strings)."""
-    line_start = text.rfind("\n", 0, match.start()) + 1
+    line_start = _bounded_rfind(text, "\n", match.start()) + 1
     line_end = text.find("\n", match.end())
     line = text[line_start:line_end if line_end != -1 else len(text)]
     tail = text[match.end():match.end() + 8]
@@ -3008,12 +3050,12 @@ def find_jailbreak_instruction(text):
     involved. Skips security-tool descriptions, examples, and refusals."""
     findings = []
     for m in _JAILBREAK.finditer(text):
-        para_start = text.rfind("\n\n", 0, m.start())
+        para_start = _bounded_rfind(text, "\n\n", m.start())
         para_end = text.find("\n\n", m.end())
         para = text[para_start if para_start != -1 else 0: para_end if para_end != -1 else len(text)]
         if _JB_DESCRIBE.search(para) or _jb_is_example(text, m):
             continue
-        line = text.count("\n", 0, m.start()) + 1
+        line = _line_no(text, m.start())
         findings.append(
             f"Line {line}: prose prompt-injection - instructs the agent to bypass "
             f"its safety/ethical constraints or run in an 'unrestricted mode' "
@@ -3033,7 +3075,7 @@ def find_prompt_exfiltration(text):
         window = text[max(0, m.start() - 50):m.end() + 50]
         if _PI_EXCLUDE.search(window):
             continue
-        line = text.count("\n", 0, m.start()) + 1
+        line = _line_no(text, m.start())
         findings.append(
             f"Line {line}: prose prompt-injection - instructs the agent to output "
             f"its own session-start instructions / system prompt "
@@ -3073,7 +3115,7 @@ def find_js_env_exfiltration(text):
     if not _JS_ENV_CAPTURE.search(text) or not _JS_NET_SEND.search(text):
         return findings
     m = _JS_ENV_CAPTURE.search(text)
-    line = text.count("\n", 0, m.start()) + 1
+    line = _line_no(text, m.start())
     findings.append(
         f"Line {line}: captures the entire process.env object "
         f"('{m.group(0)[:45].strip()}') and this file also sends data over the "
@@ -3094,12 +3136,12 @@ def find_c2_exfil_sink(text):
         for match in pattern.finditer(text):
             if _is_negated(text, match.start()):
                 continue
-            line_num = text[:match.start()].count("\n") + 1
+            line_num = _line_no(text, match.start())
             findings.append(f"Line {line_num}: {why} ('{match.group(0)[:55].strip()}...')")
     for match in _REVERSE_SHELL.finditer(text):
         if _is_negated(text, match.start()):
             continue
-        line_num = text[:match.start()].count("\n") + 1
+        line_num = _line_no(text, match.start())
         findings.append(
             f"Line {line_num}: reverse-shell pattern - redirects a shell's "
             f"input/output to a raw network socket ('{match.group(0)[:50].strip()}'), "
@@ -3138,7 +3180,7 @@ def find_covert_trigger_execution(text):
     instruction is required."""
     out = []
     for m in _COVERT_TRIGGER_EXEC.finditer(text):
-        line = text.count("\n", 0, m.start()) + 1
+        line = _line_no(text, m.start())
         out.append(f"Line {line}: hidden trigger or concealment tied to running a script "
                    f"('{m.group(0)[:90].strip()}') - a covert-execution pattern that makes the "
                    f"agent run code the user never asked for")
@@ -3165,7 +3207,7 @@ def find_instruction_supersede(text):
     for m in _OVERRIDE_V2.finditer(text):
         if _is_inside_line_comment(text, m.start()):
             continue
-        line = text.count("\n", 0, m.start()) + 1
+        line = _line_no(text, m.start())
         out.append(f"Line {line}: instruction-override language ('{m.group(0)[:80]}') - "
                    f"attempts to displace the agent's existing instructions")
     return out
@@ -3183,14 +3225,14 @@ def find_role_hijack(text):
     for m in _ROLE_HIJACK.finditer(text):
         if _is_inside_line_comment(text, m.start()):
             continue
-        line = text.count("\n", 0, m.start()) + 1
+        line = _line_no(text, m.start())
         out.append(f"Line {line}: role-hijack language ('{m.group(0)}') - tries to replace "
                    f"the agent's identity or goal")
     return out
 
 
-_HTTP_SCRIPT_DL = re.compile(r"""\b(?:curl|wget)\b[^\n|;]*\bhttp://[^\s"']+\.(?:py|sh|js|ps1|pl|rb|bin|exe)\b""", re.IGNORECASE)
-_DL_TO_FILE = re.compile(r"""\b(?:curl|wget|Invoke-WebRequest|iwr)\b[^\n]*?(?:-o|-O|--output|-OutFile)\s+["']?([\w./~$-]+\.(?:py|sh|js|ps1|pl|rb))""", re.IGNORECASE)
+_HTTP_SCRIPT_DL = re.compile(r"""\b(?:curl|wget)\b[^\n|;]{0,400}?\bhttp://[^\s"']{1,2000}\.(?:py|sh|js|ps1|pl|rb|bin|exe)\b""", re.IGNORECASE)
+_DL_TO_FILE = re.compile(r"""\b(?:curl|wget|Invoke-WebRequest|iwr)\b[^\n]{0,400}?(?:-o|-O|--output|-OutFile)\s+["']?([\w./~$-]{1,500}\.(?:py|sh|js|ps1|pl|rb))""", re.IGNORECASE)
 _TRUSTED_CODE_HOST = re.compile(r"https://(?:raw\.githubusercontent\.com|github\.com|objects\.githubusercontent\.com)/", re.IGNORECASE)
 
 
@@ -3203,22 +3245,24 @@ def find_download_then_execute(text):
     flagged: nothing legitimate needs to fetch executable code without TLS."""
     out = []
     for m in _HTTP_SCRIPT_DL.finditer(text):
-        line = text.count("\n", 0, m.start()) + 1
+        line = _line_no(text, m.start())
         out.append(f"Line {line}: downloads a script over unencrypted HTTP ('{m.group(0)[:90]}') - "
                    f"executable code fetched without TLS can be swapped in transit")
-    for m in _DL_TO_FILE.finditer(text):
-        line_start = text.rfind("\n", 0, m.start()) + 1
+    for k, m in enumerate(_DL_TO_FILE.finditer(text)):
+        if k >= _MAX_MATCHES_PER_CHECK:
+            break
+        line_start = _bounded_rfind(text, "\n", m.start()) + 1
         line_end = text.find("\n", m.end())
         full_line = text[line_start:line_end if line_end != -1 else len(text)]
         if _TRUSTED_CODE_HOST.search(full_line) or _HTTP_SCRIPT_DL.search(full_line):
             continue
         name = re.escape(os.path.basename(m.group(1)))
-        after = text[m.end():]
         # The interpreter must be its own word: a real bug in the first
         # draft read the "sh" of "script.sh" as the sh shell and flagged a
         # benign "download, review, then run" security tip.
-        if re.search(rf"(?:^|(?<=[\s;&|`(]))(?:python3?|bash|sh|node|pwsh|powershell|perl|ruby|source)\s+[^\n]*{name}|chmod\s+\+x\s+[^\n]*{name}", after, re.MULTILINE):
-            line = text.count("\n", 0, m.start()) + 1
+        run_later = re.compile(rf"(?:^|(?<=[\s;&|`(]))(?:python3?|bash|sh|node|pwsh|powershell|perl|ruby|source)\s+[^\n]*{name}|chmod\s+\+x\s+[^\n]*{name}", re.MULTILINE)
+        if run_later.search(text, m.end()):
+            line = _line_no(text, m.start())
             out.append(f"Line {line}: downloads '{m.group(1)}' and later executes it - "
                        f"two-step download-and-run of remote code")
     return out
@@ -3239,7 +3283,7 @@ def find_shell_startup_persistence(text):
     broader version flagged 12 benign skills in dev testing."""
     out = []
     for m in _RC_PERSIST.finditer(text):
-        line = text.count("\n", 0, m.start()) + 1
+        line = _line_no(text, m.start())
         out.append(f"Line {line}: writes a persistence payload into a shell startup file - "
                    f"it would silently affect every future shell session")
     return out

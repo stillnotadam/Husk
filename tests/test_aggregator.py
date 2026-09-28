@@ -624,14 +624,23 @@ def test_github_skill_helper_parses_refs(monkeypatch):
 
 # Real HTML captured from the live sites (Sept 2026), locked in so the audit
 # parsers can be regression-tested without network access.
+# RAW HTML (with tags), exactly as the server receives it - not the cleaned
+# text a browser/fetcher shows. The parsers must handle this.
 _REAL_AGENTSKILLSH_SECURITY_HTML = (
-    "title: Security Audit for design-taste-frontend (47/100) | agentskill.sh\n"
-    "meta-description: Full security analysis. Score: 47/100. Tested across 12 threat categories.\n"
-    "Security Issues 35 0 critical 1 high 1 medium 33 low\nScanned on May 27, 2026"
+    "<html><head><title>Security Audit for design-taste-frontend (47/100)"
+    " | agentskill.sh</title>"
+    "<meta name=\"description\" content=\"Score: 47/100. Tested across 12"
+    " threat categories.\"></head><body>"
+    "<div class=\"score\">47/100</div>"
+    "<div class=\"sev\">0 critical 1 high 1 medium 33 low</div>"
+    "<p>Scanned on May 27, 2026</p></body></html>"
 )
 _REAL_SKILLSSH_SOCKET_HTML = (
-    "[skills]/[swan-gtm]/[gtm-skills]/[score]/Socket\n# score\n\nPass\n\n"
-    "Audited by Socket on Jul 28, 2026\nChecks"
+    "<html><head><title>Security Audit for grill-me | skills.sh</title></head>"
+    "<body><nav>...</nav><main><div class=\"header\"><h1>score</h1>"
+    "<span class=\"badge badge-pass\">Pass</span></div>"
+    "<p class=\"audit-meta\">Audited by Socket on Jul 28, 2026</p>"
+    "<div class=\"checks\">Malicious behavior</div></main></body></html>"
 )
 
 

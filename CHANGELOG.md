@@ -4,6 +4,24 @@ All notable changes to Husk are documented here. Format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.0.0/); versioning
 follows [Semantic Versioning](https://semver.org/).
 
+## [1.3.4] - 2026-09-28
+
+### Security
+- Scanning is now linear-time on hostile input. Eight regexes with catastrophic backtracking were anchored and bounded, per-match line counting now uses a cached index, and context look-backs are capped. 200 KB of crafted text used to take over a minute; the worst case at 512 KB is now a few seconds.
+- Each detection rule stops after 500 hits, so a file repeating one pattern thousands of times can't burn CPU.
+- Skills fetched from GitHub are capped at 50 MB expanded and 5,000 files (a 0.25 MB tarball could previously write 252 MB).
+- Nested archives in one scan share a single size budget. `scan_package` and `aggregate_skill_opinions` accept a byte budget for hosted use.
+- Downloaded skills are deleted after a lookup instead of being left in temp storage, including failed ClawHub lookups and skills that sit in a subfolder of the download.
+
+## [1.3.3] - 2026-09-28
+
+### Security
+- Archives inside a skill are now unpacked with hard limits (50 MB expanded, 5,000 files, no paths outside the target folder). A nested zip bomb is reported as a finding instead of being extracted.
+- Skills fetched from GitHub are downloaded with a 30 MB cap instead of being read fully into memory.
+
+### Fixed
+- skills.sh and agentskill.sh audit verdicts showed as unavailable: the parsers were matched against cleaned text rather than the raw HTML the server receives. They now strip tags first.
+
 ## [1.3.2] - 2026-09-28
 
 ### Fixed

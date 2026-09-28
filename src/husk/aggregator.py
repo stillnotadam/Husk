@@ -230,7 +230,38 @@ def _find_skill_root(extracted, hint_path=""):
     return extracted if os.listdir(extracted) else None
 
 
+def owned_temp_dir(path):
+    """If `path` lives inside a temp folder that Husk created (tempdir/husk_*),
+    return that top-level folder, else None. Resolvers may hand back a
+    subfolder of their download dir, so cleanup must remove the whole thing,
+    and must never touch anything else."""
+    if not path:
+        return None
+    tmp = os.path.realpath(tempfile.gettempdir())
+    real = os.path.realpath(path)
+    if not real.startswith(tmp + os.sep):
+        return None
+    top = real[len(tmp) + 1:].split(os.sep, 1)[0]
+    if not top.startswith("husk_"):
+        return None
+    return os.path.join(tmp, top)
+
+
+
 def fetch_clawhub_skill(skill_ref, workdir=None):
+    """Download a ClawHub skill. Returns (path, None) or (None, error). When
+    it creates its own temp folder and the download fails, that folder is
+    removed, so a mistyped name leaves nothing behind on a long-running server."""
+    created = None
+    if workdir is None:
+        workdir = created = tempfile.mkdtemp(prefix="husk_clawhub_")
+    path, error = _fetch_clawhub_skill_inner(skill_ref, workdir)
+    if path is None and created:
+        shutil.rmtree(created, ignore_errors=True)
+    return path, error
+
+
+def _fetch_clawhub_skill_inner(skill_ref, workdir=None):
     """Download a public ClawHub skill's real files. Returns
     (directory_or_None, error_message_or_None). Never raises.
 
@@ -266,6 +297,11 @@ def fetch_clawhub_skill(skill_ref, workdir=None):
         return None, _describe_error(exc, slug)
 
 
+_MAX_GITHUB_DOWNLOAD_BYTES = 30 * 1024 * 1024
+_MAX_GITHUB_EXPANDED_BYTES = 50 * 1024 * 1024
+_MAX_GITHUB_FILES = 5000
+
+
 def _fetch_github_skill(owner_repo, skill_subpath=None, workdir=None):
     """Fetch a skill's real content from its GitHub repo (the actual source
     both skills.sh and agentskill.sh index over). Returns the local dir the
@@ -291,11 +327,12 @@ def _fetch_github_skill(owner_repo, skill_subpath=None, workdir=None):
             req = urllib.request.Request(  # noqa: S310 - fixed codeload host
                 url, headers={"User-Agent": "husk-scanner (github.com/ctrl-adam/Husk)"})
             with urllib.request.urlopen(req, timeout=30) as resp:  # noqa: S310
-                data = resp.read()
+                # stream with a hard cap: a huge repo must not be pulled into memory
+                data = resp.read(_MAX_GITHUB_DOWNLOAD_BYTES + 1)
             break
         except Exception:  # noqa: BLE001,S112 - try the next branch
             continue
-    if not data or len(data) > 80 * 1024 * 1024:
+    if not data or len(data) > _MAX_GITHUB_DOWNLOAD_BYTES:
         return None
     workdir = workdir or tempfile.mkdtemp(prefix="husk_github_")
     try:
@@ -306,9 +343,14 @@ def _fetch_github_skill(owner_repo, skill_subpath=None, workdir=None):
             root = members[0].name.split("/")[0]  # e.g. repo-main
             want = f"{root}/{skill_subpath.strip('/')}/" if skill_subpath else None
             wrote = 0
+            written_bytes = 0
             for m in members:
                 if not m.isfile():
                     continue
+                # hard caps: a tiny gzip can expand to gigabytes or to a
+                # million empty files; stop well before either hurts the host
+                if wrote >= _MAX_GITHUB_FILES or written_bytes + m.size > _MAX_GITHUB_EXPANDED_BYTES:
+                    break
                 name = m.name
                 if name.startswith("/") or ".." in name.split("/"):
                     continue
@@ -326,6 +368,7 @@ def _fetch_github_skill(owner_repo, skill_subpath=None, workdir=None):
                     with open(dest, "wb") as fh:
                         fh.write(tf.extractfile(m).read())
                     wrote += 1
+                    written_bytes += m.size
                 except Exception:  # noqa: BLE001,S112
                     continue
             return workdir if wrote else None
@@ -552,13 +595,17 @@ def _fetch_agentskillsh_native_audit(skill_ref):
     except (urllib.error.URLError, OSError):
         return {"available": False, "error": "could not reach agentskill.sh"}
 
-    score_m = re.search(r"Score:\s*(\d+)\s*/\s*100", html) or re.search(r"\((\d+)/100\)", html)
+    text = re.sub(r"<[^>]+>", " ", html)
+    text = re.sub(r"\s+", " ", text)
+    score_m = (re.search(r"Score:\s*(\d+)\s*/\s*100", text)
+               or re.search(r"\((\d+)/100\)", text)
+               or re.search(r"(\d+)\s*/\s*100", text))
     if not score_m:
         return {"available": False, "error": "no security score published for this skill"}
     score = int(score_m.group(1))
 
     def _count(word):
-        m = re.search(r"(\d+)\s*" + word + r"\b", html, re.IGNORECASE)
+        m = re.search(r"(\d+)\s*" + word + r"\b", text, re.IGNORECASE)
         return int(m.group(1)) if m else 0
 
     crit, high, med, low = _count("critical"), _count("high"), _count("medium"), _count("low")
@@ -599,7 +646,9 @@ def _fetch_skillssh_native_audit(skill_ref):
         candidates = ["/".join(parts[:3])]
     else:
         org, repo = parts[0], parts[1]
-        candidates = [f"{org}/{repo}/{repo}"]  # skill often named like the repo
+        # a 2-part ref (org/skill) - the skills.sh path is org/repo/skill; the
+        # repo is often 'skills' or named like the skill, so try both shapes
+        candidates = [f"{org}/{repo}/{repo}", f"{org}/skills/{repo}"]
 
     for path in candidates:
         for auditor in ("socket", "agent-trust-hub", "snyk"):
@@ -611,9 +660,22 @@ def _fetch_skillssh_native_audit(skill_ref):
                     html = resp.read().decode("utf-8", errors="replace")
             except (urllib.error.URLError, OSError):
                 continue
-            vm = re.search(r"\n\s*(Pass|Warn|Fail)\s*\n", html)
-            am = re.search(r"Audited by\s+([\w\s-]+?)\s+on\s+", html)
-            if vm:
+            # Robust against raw HTML (tags, not clean newlines): the verdict
+            # word (Pass/Warn/Fail) sits right before "Audited by <auditor> on".
+            # Strip tags to plain text, collapse whitespace, then match.
+            text = re.sub(r"<[^>]+>", " ", html)
+            text = re.sub(r"\s+", " ", text)
+            am = re.search(r"Audited by\s+([\w\s-]+?)\s+on\s+", text)
+            # verdict = the last Pass/Warn/Fail token appearing before "Audited by"
+            vm = None
+            if am:
+                before = text[:am.start()]
+                for m in re.finditer(r"\b(Pass|Warn|Fail)\b", before):
+                    vm = m
+            if vm is None:
+                vm = re.search(r"\b(Pass|Warn|Fail)\b", text)
+            # only trust it if this really is an audit page (avoid false matches)
+            if vm and ("Audited by" in text or "Security Audit" in text):
                 badge = vm.group(1)
                 auditor_name = am.group(1).strip() if am else auditor
                 return {"available": True,
@@ -623,8 +685,8 @@ def _fetch_skillssh_native_audit(skill_ref):
     return {"available": False, "error": "no published skills.sh audit for this skill"}
 
 
-def aggregate_skill_opinions(skill_ref, marketplace="clawhub", local_path=None,
-                              external_results=None, auto_fetch=True):
+def aggregate_skill_opinions(skill_ref, marketplace="clawhub", local_path=None,  # noqa: PLR0913
+                              external_results=None, auto_fetch=True, *, max_scan_bytes=None):  # noqa: PLR0913
     """
     Combines Husk's own verdict with whatever external sources are
     actually available right now. Deliberately takes external_results
@@ -685,10 +747,21 @@ def aggregate_skill_opinions(skill_ref, marketplace="clawhub", local_path=None,
             # Resolvers may return a path, or (path, error) to explain failures.
             scan_target, resolve_error = out if isinstance(out, tuple) else (out, None)
 
-    if scan_target and os.path.exists(scan_target):
+    fetched = bool(scan_target) and not local_path  # we created it, so we clean it up
+    too_big = None
+    if scan_target and os.path.exists(scan_target) and max_scan_bytes:
+        size = (sum(os.path.getsize(os.path.join(dp, f)) for dp, _, fs in os.walk(scan_target) for f in fs)
+                if os.path.isdir(scan_target) else os.path.getsize(scan_target))
+        if size > max_scan_bytes:
+            too_big = (f"This skill is {size / 1048576:.1f} MB, more than the "
+                       f"{max_scan_bytes / 1048576:.0f} MB the online scanner handles. "
+                       "Install Husk and run it locally to scan the whole thing.")
+    if too_big:
+        opinions["husk"] = {"available": False, "error": too_big}
+    elif scan_target and os.path.exists(scan_target):
         try:
             if os.path.isdir(scan_target):
-                findings = scan_package(scan_target)
+                findings = scan_package(scan_target, max_archive_bytes=max_scan_bytes)
                 result = {"verdict": "FLAGGED" if findings else "SAFE", "findings": findings}
             else:
                 result = scan_skill_file(scan_target)
@@ -708,6 +781,12 @@ def aggregate_skill_opinions(skill_ref, marketplace="clawhub", local_path=None,
                 f"own scan did not run. Pass local_path directly if you already have it."
             ),
         }
+    if fetched and scan_target:
+        # resolvers download into fresh husk_* temp folders and may return a
+        # subfolder; remove the whole owned folder, and nothing outside it
+        owned = owned_temp_dir(scan_target)
+        if owned:
+            shutil.rmtree(owned, ignore_errors=True)
 
     for source_name, fetch_fn in EXTERNAL_SOURCES.items():
         scope = _SOURCE_SCOPE.get(source_name)

@@ -11,5 +11,5 @@ from .package_scanner import scan_package
 from .pickle_scanner import scan_file as scan_pickle_file
 from .skill_scanner import scan_skill_file
 
-__version__ = "1.3.2"
+__version__ = "1.3.4"
 __all__ = ["scan_skill_file", "scan_package", "scan_pickle_file"]
