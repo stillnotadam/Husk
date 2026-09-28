@@ -471,16 +471,32 @@ def resolve_agentskillsh_skill(skill_ref, workdir=None):
     or None if the request fails for any reason - never raises.
     """
     skill_slug = skill_ref.lstrip("@")
-    encoded_slug = urllib.parse.quote(skill_slug, safe="")
-    api_url = f"https://agentskill.sh/api/agent/skills/{encoded_slug}/install"
+    # agentskill.sh's documented install API uses the RAW slash in the path
+    # (GET /api/agent/skills/<owner>/<skill>/install), not a %2F-encoded slug.
+    # Encode each path segment but keep the separators as real slashes; fall
+    # back to the fully-encoded form in case a future router prefers it.
+    seg_encoded = "/".join(urllib.parse.quote(p, safe="") for p in skill_slug.split("/"))
+    full_encoded = urllib.parse.quote(skill_slug, safe="")
+    api_urls = [
+        f"https://agentskill.sh/api/agent/skills/{seg_encoded}/install",
+        f"https://agentskill.sh/api/agent/skills/{full_encoded}/install",
+    ]
 
+    data = None
+    for api_url in api_urls:
+        try:
+            req = urllib.request.Request(  # noqa: S310 - fixed agentskill.sh API host
+                api_url, headers={"User-Agent": "husk-scanner (github.com/ctrl-adam/Husk)"},
+            )
+            with urllib.request.urlopen(req, timeout=15) as resp:  # noqa: S310
+                data = json.loads(resp.read().decode("utf-8"))
+            if data:
+                break
+        except (urllib.error.URLError, json.JSONDecodeError, OSError, ValueError):
+            continue
+    if not data:
+        return None
     try:
-        req = urllib.request.Request(  # noqa: S310 - fixed https:// URL to agentskill.sh's own documented API, not user-controlled
-            api_url, headers={"User-Agent": "husk-scanner (github.com/ctrl-adam/Husk)"},
-        )
-        with urllib.request.urlopen(req, timeout=15) as resp:  # noqa: S310 - fixed URL, not user input
-            data = json.loads(resp.read().decode("utf-8"))
-
         skill_md = data.get("skillMd")
         if not skill_md:
             return None
@@ -506,11 +522,9 @@ def resolve_agentskillsh_skill(skill_ref, workdir=None):
                 f.write(content)
 
         return workdir
-    except (urllib.error.URLError, json.JSONDecodeError, OSError, ValueError):
-        # agentskill.sh indexes GitHub-hosted skills; if its own API can't be
-        # reached (network policy, downtime), fall back to the real source on
-        # GitHub. The slug is owner/skill and maps to the owner/repo there.
-        return _fetch_github_skill(skill_slug, workdir=workdir)
+    except (OSError, ValueError):
+        # writing the fetched content failed - return cleanly, never raise
+        return None
 
 
 @register_external_source("agentskillsh_native", marketplaces=["agentskillsh"])

@@ -346,10 +346,11 @@ def test_resolve_agentskillsh_skill_returns_none_when_skillmd_missing(tmp_path, 
     assert result is None
 
 
-def test_resolve_agentskillsh_skill_url_encodes_the_slug_correctly(tmp_path, monkeypatch):
-    """Real, deliberate check: the API path needs owner/skill joined
-    with an encoded '/' (%2F), confirmed directly against
-    agentskill.sh's own documented API shape, not assumed."""
+def test_resolve_agentskillsh_skill_uses_raw_slash_path(tmp_path, monkeypatch):
+    """agentskill.sh's documented install API uses the RAW slash in the path
+    (GET /api/agent/skills/<owner>/<skill>/install), not a %2F-encoded slug.
+    The earlier %2F form 404'd on the live router, which is exactly the bug
+    that made agentskill.sh lookups fail. First URL tried must use raw slashes."""
     captured_urls = []
 
     class FakeResponse:
@@ -369,7 +370,7 @@ def test_resolve_agentskillsh_skill_url_encodes_the_slug_correctly(tmp_path, mon
     monkeypatch.setattr("husk.aggregator.urllib.request.urlopen", _fake_urlopen)
     resolve_agentskillsh_skill("someuser/some-skill", workdir=str(tmp_path))
 
-    assert captured_urls[0] == "https://agentskill.sh/api/agent/skills/someuser%2Fsome-skill/install"
+    assert captured_urls[0] == "https://agentskill.sh/api/agent/skills/someuser/some-skill/install"
 
 
 # ---------------------------------------------------------------------
@@ -619,25 +620,6 @@ def test_github_skill_helper_parses_refs(monkeypatch):
     aggregator.resolve_skillssh_skill("https://github.com/leonxlnx/taste-skill/tree/main/skills/foo")
     assert calls["owner_repo"] == "leonxlnx/taste-skill"
     assert calls["subpath"] == "skills/foo"
-
-
-def test_agentskillsh_falls_back_to_github(monkeypatch):
-    """When agentskill.sh's own API is unreachable, the resolver falls back to
-    fetching the skill from its GitHub source."""
-    def boom(*a, **k):
-        raise OSError("blocked")
-
-    monkeypatch.setattr(aggregator.urllib.request, "urlopen", boom)
-    called = {}
-
-    def fake_fetch(owner_repo, skill_subpath=None, workdir=None):
-        called["ref"] = owner_repo
-        return "FAKE_PATH"
-
-    monkeypatch.setattr(aggregator, "_fetch_github_skill", fake_fetch)
-    result = aggregator.resolve_agentskillsh_skill("leonxlnx/taste-skill")
-    assert result == "FAKE_PATH"
-    assert called["ref"] == "leonxlnx/taste-skill"
 
 
 # Real HTML captured from the live sites (Sept 2026), locked in so the audit

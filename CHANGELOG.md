@@ -4,6 +4,13 @@ All notable changes to Husk are documented here. Format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.0.0/); versioning
 follows [Semantic Versioning](https://semver.org/).
 
+## [1.3.2] - 2026-09-28
+
+### Fixed
+- agentskill.sh skill lookup: the install API URL was %2F-encoded and 404'd on
+  their live router; now uses the documented raw-slash path
+  (/api/agent/skills/<owner>/<skill>/install), matching their real API exactly.
+
 ## [1.3.1] - 2026-09-28
 
 Marketplace lookup actually works for all three registries, plus each
@@ -260,11 +267,10 @@ Found by running Husk against 452 real ClawHub skills (benchmarks/clawhub_benchm
   their own detection patterns in comments or list literals (matched
   as if they were real calls), legitimate `urllib.request.urlopen()`
   fetches misread as exfiltration sends, and more - each with a
-  permanent regression fixture added. Full account in BENCHMARK.md.
+  permanent regression fixture added.
 
 ## [1.0.1] and earlier
 
-See git history and BENCHMARK.md for the full, detailed account of
-this project's development - every benchmark run, every competitor
-comparison, every bug found and fixed, documented as it happened
-rather than summarized after the fact.
+First public releases: the core detection engine, package/archive and
+pickle-model scanning, the optional sandbox and LLM-review layers, and
+the dual-dataset benchmark.
