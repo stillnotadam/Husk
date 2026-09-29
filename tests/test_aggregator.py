@@ -685,3 +685,125 @@ def test_audit_sources_unavailable_on_network_error(monkeypatch):
     monkeypatch.setattr(aggregator.urllib.request, "urlopen", boom)
     assert aggregator._fetch_agentskillsh_native_audit("a/b")["available"] is False
     assert aggregator._fetch_skillssh_native_audit("a/b/c")["available"] is False
+
+
+# skills.sh refs are owner/repo/<skill name>, but the skill often lives in a
+# subfolder of the repo. Every layout must resolve to exactly that skill.
+def _tgz(entries):
+    import io as _io
+    import tarfile as _tar
+    buf = _io.BytesIO()
+    with _tar.open(fileobj=buf, mode="w:gz") as t:
+        for name, data in entries:
+            ti = _tar.TarInfo(name)
+            ti.size = len(data)
+            t.addfile(ti, _io.BytesIO(data))
+    return buf.getvalue()
+
+
+def _skill(n):
+    return f"---\nname: {n}\n---\nbody of {n}".encode()
+
+
+@pytest.mark.parametrize("entries", [
+    [("r-main/find-skills/SKILL.md", _skill("find-skills"))],
+    [("r-main/skills/find-skills/SKILL.md", _skill("find-skills")), ("r-main/skills/other/SKILL.md", _skill("other"))],
+    [("r-main/packages/tools/find-skills/SKILL.md", _skill("find-skills"))],
+    [("r-main/skills/finder/SKILL.md", _skill("find-skills")), ("r-main/skills/other/SKILL.md", _skill("other"))],
+    [("r-main/a/b/find-skills/SKILL.md", _skill("find-skills")), ("r-main/skills/find-skills/SKILL.md", _skill("find-skills"))],
+])
+def test_skillssh_ref_resolves_skill_in_any_subfolder(entries, monkeypatch):
+    blob = _tgz(entries)
+
+    class R:
+        def read(self, n=-1): return blob if n < 0 else blob[:n]
+        def __enter__(self): return self
+        def __exit__(self, *a): return False
+    monkeypatch.setattr(aggregator.urllib.request, "urlopen", lambda *a, **k: R())
+    d = aggregator.resolve_skillssh_skill("vercel-labs/skills/find-skills")
+    assert d and open(os.path.join(d, "SKILL.md")).read().endswith("body of find-skills")
+    assert os.listdir(d) == ["SKILL.md"]
+
+
+def test_skillssh_ref_missing_skill_returns_none(monkeypatch):
+    blob = _tgz([("r-main/skills/other/SKILL.md", _skill("other"))])
+
+    class R:
+        def read(self, n=-1): return blob if n < 0 else blob[:n]
+        def __enter__(self): return self
+        def __exit__(self, *a): return False
+    monkeypatch.setattr(aggregator.urllib.request, "urlopen", lambda *a, **k: R())
+    assert aggregator.resolve_skillssh_skill("vercel-labs/skills/find-skills") is None
+
+
+# Large repositories: when the whole-repo download is over the cap, only the
+# skill's own folder is fetched (tree API + raw files), with the same limits.
+class _Big:
+    def read(self, n=-1): return b"x" * (aggregator._MAX_GITHUB_DOWNLOAD_BYTES + 10)
+    def __enter__(self): return self
+    def __exit__(self, *a): return False
+
+
+def _raw_server(files):
+    class R:
+        def __init__(self, b): self.b = b
+        def read(self, n=-1): return self.b
+        def __enter__(self): return self
+        def __exit__(self, *a): return False
+
+    def urlopen(req, timeout=None):
+        url = req.full_url
+        if "codeload.github.com" in url:
+            return _Big()
+        for path, body in files.items():
+            if url.endswith("/HEAD/" + path):
+                return R(body)
+        raise OSError("404")
+    return urlopen
+
+
+def test_big_repo_fetches_only_the_skill_folder(monkeypatch):
+    files = {"skills/vigil/SKILL.md": b"---\nname: vigil\n---\nok", "skills/vigil/run.py": b"print(1)",
+             "skills/other/SKILL.md": b"---\nname: other\n---\nno"}
+    monkeypatch.setattr(aggregator, "_TREE_CACHE", {})
+    monkeypatch.setattr(aggregator, "_gh_api", lambda url: {"tree": [{"path": p, "type": "blob"} for p in files], "truncated": False})
+    monkeypatch.setattr(aggregator.urllib.request, "urlopen", _raw_server(files))
+    d = aggregator.resolve_skillssh_skill("modbender/skill-library-mcp/vigil")
+    assert d and sorted(os.listdir(d)) == ["SKILL.md", "run.py"]
+
+
+def test_truncated_tree_falls_back_to_common_locations(monkeypatch):
+    files = {"skills/vigil/SKILL.md": b"---\nname: vigil\n---\nok"}
+    monkeypatch.setattr(aggregator, "_TREE_CACHE", {})
+
+    def api(url):
+        if "/git/trees/" in url:
+            return {"tree": [], "truncated": True}
+        if url.endswith("/contents/skills/vigil"):
+            return [{"type": "file", "path": "skills/vigil/SKILL.md"}]
+        raise OSError("404")
+    monkeypatch.setattr(aggregator, "_gh_api", api)
+    monkeypatch.setattr(aggregator.urllib.request, "urlopen", _raw_server(files))
+    d = aggregator.resolve_skillssh_skill("modbender/skill-library-mcp/vigil")
+    assert d and os.listdir(d) == ["SKILL.md"]
+
+
+def test_big_repo_folder_fetch_blocks_path_escape(monkeypatch, tmp_path):
+    files = {"skills/vigil/SKILL.md": b"---\nname: vigil\n---\nok", "skills/vigil/../../../escape.txt": b"pwned"}
+    monkeypatch.setattr(aggregator, "_TREE_CACHE", {})
+    monkeypatch.setattr(aggregator, "_gh_api", lambda url: {"tree": [{"path": p, "type": "blob"} for p in files], "truncated": False})
+    monkeypatch.setattr(aggregator.urllib.request, "urlopen", _raw_server(files))
+    d = aggregator.resolve_skillssh_skill("o/r/vigil")
+    assert d and os.listdir(d) == ["SKILL.md"]
+    target = os.path.normpath(os.path.join(d, "..", "..", "escape.txt"))  # where the ../ path would land
+    assert not os.path.exists(target)
+
+
+def test_big_repo_rate_limited_returns_none(monkeypatch):
+    monkeypatch.setattr(aggregator, "_TREE_CACHE", {})
+
+    def api(url):
+        raise OSError("403 rate limited")
+    monkeypatch.setattr(aggregator, "_gh_api", api)
+    monkeypatch.setattr(aggregator.urllib.request, "urlopen", _raw_server({}))
+    assert aggregator.resolve_skillssh_skill("o/r/vigil") is None

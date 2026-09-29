@@ -22,6 +22,7 @@ anyone can open, and every Husk verdict is reproducible with `husk skill`.
 Run it on a machine with open internet (skills.sh is not reachable from the
 dev sandbox):
 
+    python benchmarks/skillssh_auditor_benchmark.py --leaderboard 200 --out bench_report
     python benchmarks/skillssh_auditor_benchmark.py skills.txt --out bench_report
 
 `skills.txt` is one skills.sh ref per line, as `org/repo/skill`
@@ -33,6 +34,7 @@ import argparse
 import json
 import os
 import re
+import shutil
 import sys
 import time
 import urllib.error
@@ -41,7 +43,7 @@ import urllib.request
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "src"))
 
-from husk.aggregator import resolve_skillssh_skill  # noqa: E402
+from husk.aggregator import owned_temp_dir, resolve_skillssh_skill  # noqa: E402
 from husk.package_scanner import scan_package  # noqa: E402
 
 UA = "husk-benchmark (+https://github.com/ctrl-adam/Husk)"
@@ -95,8 +97,13 @@ def husk_verdict(skill_ref):
         return None, []
     if not path:
         return None, []
-    findings = scan_package(path)
-    return ("FLAGGED" if findings else "SAFE"), [f.get("finding", str(f)) for f in findings][:5]
+    try:
+        findings = scan_package(path)
+    finally:
+        owned = owned_temp_dir(path)
+        if owned:
+            shutil.rmtree(owned, ignore_errors=True)
+    return ("FLAGGED" if findings else "SAFE"), [str(f) for f in findings][:5]
 
 
 def normalize_auditor(badge):
@@ -105,6 +112,24 @@ def normalize_auditor(badge):
         return None
     return "FLAGGED" if badge in ("Warn", "Fail") else "SAFE"
 
+
+
+_LINK = re.compile(r'<a\b[^>]*?href="(?:https://(?:www\.)?skills\.sh)?/([A-Za-z0-9_.-]+)/([A-Za-z0-9_.-]+)/([A-Za-z0-9_.-]+)"', re.S)
+_RESERVED = {"topic", "agent", "docs", "packs", "official", "audits", "trending", "hot", "about",
+             "contact", "privacy", "terms", "site", "api", "agents"}
+
+
+def refs_from_leaderboard(n):
+    """The top-n skills from the public skills.sh leaderboard pages (all-time,
+    then trending), as org/repo/skill refs, in rank order, no duplicates."""
+    out = []
+    for view in ("", "trending"):
+        html = _http(f"https://www.skills.sh/{view}") or ""
+        for owner, repo, skill in _LINK.findall(html):
+            ref = f"{owner}/{repo}/{skill}"
+            if owner.lower() not in _RESERVED and ref not in out:
+                out.append(ref)
+    return out[:n]
 
 def benchmark(refs, out_dir):
     os.makedirs(out_dir, exist_ok=True)
@@ -197,11 +222,22 @@ def write_report(rows_path, md_path):
 
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("skills_file", help="one skills.sh ref per line (org/repo/skill)")
+    ap.add_argument("skills_file", nargs="?", help="one skills.sh ref per line (org/repo/skill)")
+    ap.add_argument("--leaderboard", type=int, metavar="N",
+                    help="instead of a file, take the top N skills from the skills.sh leaderboard")
     ap.add_argument("--out", default="bench_report")
     args = ap.parse_args()
-    with open(args.skills_file, encoding="utf-8") as fh:
-        refs = [l.strip() for l in fh if l.strip() and not l.startswith("#")]
+    if args.leaderboard:
+        refs = refs_from_leaderboard(args.leaderboard)
+        print(f"Took {len(refs)} skills from the skills.sh leaderboard.")
+        os.makedirs(args.out, exist_ok=True)
+        with open(os.path.join(args.out, "skills.txt"), "w", encoding="utf-8") as fh:
+            fh.write("\n".join(refs) + "\n")
+    elif args.skills_file:
+        with open(args.skills_file, encoding="utf-8") as fh:
+            refs = [l.strip() for l in fh if l.strip() and not l.startswith("#")]
+    else:
+        ap.error("give a skills file or --leaderboard N")
     print(f"Benchmarking Husk against Socket/Snyk/Gen on {len(refs)} skills...\n")
     benchmark(refs, args.out)
 

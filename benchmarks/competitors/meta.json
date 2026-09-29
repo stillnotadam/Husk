@@ -1,0 +1,20 @@
+{
+ "husk": ["Husk", "1.3.5", "this project"],
+ "cisco": ["Cisco AI Defense skill-scanner", "2.1.0", "pip install cisco-ai-skill-scanner"],
+ "skillspector": ["NVIDIA SkillSpector", "2.12.0", "github.com/NVIDIA/SkillSpector (--no-llm)"],
+ "skillscansec": ["skillscan-security", "0.7.0", "pip install skillscan-security"],
+ "skillfortify": ["SkillFortify", "0.6.0", "pip install skillfortify"],
+ "skillfrisk": ["skillfrisk", "0.3.0", "pip install skillfrisk"],
+ "agentaudit": ["agent-audit", "0.20.0", "pip install agent-audit"],
+ "agentauditkit": ["agent-audit-kit", "0.6.10", "pip install agent-audit-kit"],
+ "agentscan": ["agentscan-cli", "1.2.2", "pip install agentscan-cli"],
+ "skillguard": ["skillguard", "1.0.0", "pip install skillshield"],
+ "syedabbast": ["syedabbast/skill-scanner", "git HEAD", "github.com/syedabbast/skill-scanner"],
+ "npmskillaudit": ["skill-audit (npm)", "0.1.1", "npm i @royalpinto007/skill-audit"],
+ "shielder": ["skill-shielder", "git HEAD", "github.com/p3nchan/skill-shielder"],
+ "secureai": ["SecureAI-Scan", "0.11.0", "npm i secureai-scan"],
+ "malwar": ["malwar", "0.4.0", "github.com/Ap6pack/malwar (--no-llm --no-urls)"],
+ "opentrapp": ["OpenTrApp Skill Firewall", "2.0.0", "github.com/albertdobmeyer/opentrapp"],
+ "steffano": ["skill-security-scanner (Steffano198)", "git HEAD", "github.com/Steffano198/skill-security-scanner"],
+ "clawhubbridge": ["clawhub-bridge", "5.1.0", "pip install clawhub-bridge"]
+}

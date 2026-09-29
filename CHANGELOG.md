@@ -4,6 +4,22 @@ All notable changes to Husk are documented here. Format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.0.0/); versioning
 follows [Semantic Versioning](https://semver.org/).
 
+## [1.3.5] - 2026-09-29
+
+### Security
+- The trusted-installer allowlist matched a substring of the URL, so a malicious `curl | bash` could be demoted to a harmless note by mentioning a trusted name anywhere in it (`evil.com/?x=astral.sh`, `astral.sh.evil.com`, `notbun.sh`, `astral.sh@evil.com`). The real hostname is now parsed and must match exactly.
+
+### Added
+- New detections for blind spots found in the head-to-head benchmark, each measured on the full 11,225 malicious / 4,249 legitimate datasets before being added: persistence through the Windows Startup folder or scheduled tasks, code that appends to shell startup files, skills that describe establishing persistence, filesystem hunts for credential files (`.env`, SSH keys, `.pem`), and code that downloads something and then imports or runs it. Plain downloads stay unflagged.
+- Skills that re-download their own instructions into a skills folder get an informational note (not a flag: many legitimate skills do this).
+- Lookups work for skills inside very large repositories: when a repository is too big to download whole, only the skill's own folder is fetched. Set `GITHUB_TOKEN` for a higher GitHub API limit.
+- A head-to-head benchmark against 16 other skill scanners, every tool on the same fixed sample (see BENCHMARK.md).
+- CI on Python 3.9-3.13, and releases published automatically from a version tag.
+
+### Fixed
+- Husk failed on Python 3.9 and 3.10 (a pattern used in 1.3.4's hardening needs 3.11). Rewritten to work everywhere, with the same protection against slow-matching input.
+- skills.sh lookups failed ("No verdict") for skills that live in a subfolder of their repository, such as `skills/<name>/`.
+
 ## [1.3.4] - 2026-09-28
 
 ### Security

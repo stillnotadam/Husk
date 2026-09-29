@@ -1,0 +1,74 @@
+{
+ "husk": {
+  "cmd": "/opt/c_husk/bin/python /home/claude/cbench/husk_one.py '{path}'",
+  "timeout": 60
+ },
+ "cisco": {
+  "cmd": "/opt/c_cisco_ai_skill_scanner/bin/skill-scanner scan '{path}' --format json --lenient",
+  "timeout": 90
+ },
+ "skillspector": {
+  "cmd": "/opt/c_skillspector/bin/skillspector scan '{path}' --no-llm --format json",
+  "timeout": 90
+ },
+ "skillfortify": {
+  "cmd": "bash /home/claude/cbench/sf.sh '{path}'",
+  "timeout": 60
+ },
+ "skillfrisk": {
+  "cmd": "/opt/c_skillfrisk/bin/skillfrisk scan '{path}' --json --no-fail-on-high",
+  "timeout": 60
+ },
+ "agentaudit": {
+  "cmd": "/opt/c_agent_audit/bin/agent-audit scan '{path}' --format json",
+  "timeout": 60
+ },
+ "agentauditkit": {
+  "cmd": "/opt/c_agent_audit_kit/bin/agent-audit-kit scan '{path}' --format json",
+  "timeout": 60
+ },
+ "agentscan": {
+  "cmd": "/opt/c_agentscan_cli/bin/agentscan -q scan '{path}' --severity info",
+  "timeout": 60
+ },
+ "skillguard": {
+  "cmd": "/opt/c_skillshield/bin/skillguard scan '{path}' --format json",
+  "timeout": 60
+ },
+ "syedabbast": {
+  "cmd": "python3 /opt/src_skill-scanner/scan_skill.py '{path}' --format json",
+  "timeout": 60
+ },
+ "npmskillaudit": {
+  "cmd": "node /opt/c_skillaudit_npm/node_modules/.bin/skill-audit '{path}' --format json --fail-on info",
+  "timeout": 60
+ },
+ "shielder": {
+  "cmd": "bash /opt/src_skill-shielder/shield.sh '{path}'",
+  "timeout": 60
+ },
+ "secureai": {
+  "cmd": "bash /home/claude/cbench/sa.sh '{path}'",
+  "timeout": 60
+ },
+ "malwar": {
+  "cmd": "/opt/c_malwar/bin/malwar scan '{path}' --no-llm --no-urls --format json",
+  "timeout": 90
+ },
+ "opentrapp": {
+  "cmd": "bash /opt/src_opentrapp/workloads/skills/skill scan '{path}' --format=json",
+  "timeout": 60
+ },
+ "skillscansec": {
+  "cmd": "/opt/c_skillscansec/bin/skillscan scan '{path}' --format json --fail-on never --no-auto-intel",
+  "timeout": 90
+ },
+ "steffano": {
+  "cmd": "bash /opt/src_skill-security-scanner/scripts/scan-skill.sh '{path}'",
+  "timeout": 60
+ },
+ "clawhubbridge": {
+  "cmd": "/opt/c_clawhubbridge/bin/clawhub scan '{path}' --json",
+  "timeout": 60
+ }
+}

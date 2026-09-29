@@ -10,7 +10,7 @@
 | **After install** | `husk watch` | Alerts when an installed skill that was safe turns malicious after an update |
 | **Any time** | `husk explain` | Shows the exact source&rarr;variable&rarr;sink data-flow trace behind a finding - the auditable *why* |
 
-Underneath is a detection engine with **real AST-based taint analysis for both Python and JavaScript/TypeScript** (not just regex), that **reads bundled PDFs** where attackers hide instructions, and that deterministically catches **no-code prompt-injection** attacks usually assumed to require an LLM. Built to defeat bypass techniques shown, in published 2026 research, to beat production scanners from Snyk, Cisco, and Vercel's skills.sh - benchmarked on **11,225 real malicious samples** (see below), clearing **99.6%** of real legitimate skills. Everything is offline, deterministic, and open-source (AGPL-3.0). No marketplace lock-in, no API keys, no data leaves your machine.
+Underneath is a detection engine with **real AST-based taint analysis for both Python and JavaScript/TypeScript** (not just regex), that **reads bundled PDFs** where attackers hide instructions, and that deterministically catches **no-code prompt-injection** attacks usually assumed to require an LLM. Built to defeat bypass techniques shown, in published 2026 research, to beat production scanners from Snyk, Cisco, and Vercel's skills.sh - benchmarked on **11,224 real malicious samples** (see below), clearing **99.6%** of real legitimate skills. Everything is offline, deterministic, and open-source (AGPL-3.0). No marketplace lock-in, no API keys, no data leaves your machine.
 
 [CHANGELOG](CHANGELOG.md) - what's new in each release, actively maintained.
 
@@ -62,20 +62,23 @@ The attestation binds a SHA-256 of the skill's exact content to Husk's verdict a
 Real numbers, real datasets, no cherry-picking: full results and
 methodology in [BENCHMARK.md](BENCHMARK.md).
 
-![Husk vs. competitors, matched precision](assets/benchmark_comparison.png)
+The 2026-09 head-to-head ran **Husk and 16 other skill scanners on the same fixed sample**:
+300 confirmed-malicious skills, 249 hand-checked legitimate skills and 150 research-benign
+skills, current versions, no LLM, scored by rules fixed before any result was seen.
 
-At matched precision (each tool's strictest reading), Husk has the
-best combination of recall and precision of every real competitor
-tested - and it's the only tool near the "usable as an automated gate"
-corner:
+![Husk vs. 14 skill scanners](assets/precision_recall_tradeoff.png)
 
-![Precision vs. recall tradeoff](assets/precision_recall_tradeoff.png)
-
-| | Recall (real malicious) | Precision (real legitimate) |
+| Strict reading, same 699-skill sample | Malware caught | Hand-checked legit passed |
 |---|---|---|
-| **Husk** | **63.8–65.6% recall (11,225 real malicious samples)** | **99.6% of real skills cleared** |
-| Best competitor at matched precision | ~57% | 81–94% |
-| Best competitor raw recall (loose mode, high false positives) | 92.5% | 22–59% |
+| **Husk** | **67.3%** | **99.6%** |
+| Next-highest catch rate (syedabbast/skill-scanner) | 64.3% | 86.7% |
+| Only tool with the same false-alarm rate (SecureAI-Scan) | 22.3% | 99.6% |
+| Cisco AI Defense (200-skill subset, Husk 60.0% / 98.0% there) | 51.6% | 88.0% |
+| NVIDIA SkillSpector (200-skill subset) | 58.3% | 65.1% |
+
+Across both datasets in full, Husk catches 64.8-67.3% of 11,224 real malicious samples and
+passes 95.4% of a larger 4,000-skill research set. Husk's known blind spots, found in this
+round, are listed in BENCHMARK.md.
 
 Snyk's own Agent Scan is excluded from the numeric comparison - its
 real analysis endpoint returns 403 even with a valid account token
@@ -105,7 +108,7 @@ Husk has grown well past the original bypass techniques it was built to answer. 
 | Supply chain | npm postinstall/preinstall hooks, declared-vs-actual capability mismatch, untrusted remote package installs (raw archive URLs instead of registry names) |
 | Other | Ransomware behavior, SQL injection (including via query-building helper functions), sensitive-data logging, macOS JXA execution, unconstrained path reads, CPU-bound resource exhaustion |
 
-Every module above is traceable to either published research or a specific real malicious sample found during this project's own testing against 11,225 real confirmed-malicious skills across two independent academic datasets, or against a third, independently-labeled corpus (`cisco-ai-defense/skill-scanner`'s own `evals/`, 13/16 malicious fixtures caught with 0 false positives - see BENCHMARK.md). Full list with the reasoning behind each: [`src/husk/skill_scanner.py`](src/husk/skill_scanner.py).
+Every module above is traceable to either published research or a specific real malicious sample found during this project's own testing against 11,224 real confirmed-malicious skills across two independent academic datasets, or against a third, independently-labeled corpus (`cisco-ai-defense/skill-scanner`'s own `evals/`, 13/16 malicious fixtures caught with 0 false positives - see BENCHMARK.md). Full list with the reasoning behind each: [`src/husk/skill_scanner.py`](src/husk/skill_scanner.py).
 
 ## Validated against real-world research, not just self-built test cases
 
@@ -366,7 +369,7 @@ exactly that.
 
 ## What v1 does NOT do yet
 
-- **Real-world recall is 63.7-65.6%, not 100%** (measured against 11,225 real confirmed-malicious samples across two independent datasets - see BENCHMARK.md for the full methodology). The main gap: **novel, semantically-disguised attacks with no code and no recognizable keywords** - a subtle instruction-blurring attack and a fake "compliance auditor" asking in plain prose for secrets, both missed by static analysis and saved openly in `tests/known_misses/` rather than hidden. This matches published research showing static pattern-matching tops out around 13-32% recall on novel/disguised attacks generally - not a Husk-specific flaw, but a real, honest limit of this entire approach. The optional `--llm-review` layer exists specifically for this gap.
+- **Real-world recall is 64.8-67.3%, not 100%** (measured against 11,224 real confirmed-malicious samples across two independent datasets - see BENCHMARK.md for the full methodology). The main gap: **novel, semantically-disguised attacks with no code and no recognizable keywords** - a subtle instruction-blurring attack and a fake "compliance auditor" asking in plain prose for secrets, both missed by static analysis and saved openly in `tests/known_misses/` rather than hidden. This matches published research showing static pattern-matching tops out around 13-32% recall on novel/disguised attacks generally - not a Husk-specific flaw, but a real, honest limit of this entire approach. The optional `--llm-review` layer exists specifically for this gap.
 - **Two structural limits no pre-execution scanner, static or LLM, can ever close**: Self-Mutating Poisoning (the malicious content doesn't exist in the file until the skill actually runs) and dynamically-generated payloads. Confirmed directly against real samples exhibiting both patterns.
 - Archive extraction currently unpacks ZIP; GZIP/7z/RAR are detected (a mismatched-extension archive still gets flagged) but not yet recursively unpacked
 - The AST taint tracker follows data flow within a file, including into a function through its parameters, but doesn't re-trace taint propagating deeper inside a callee's own body, and doesn't cross module/file boundaries

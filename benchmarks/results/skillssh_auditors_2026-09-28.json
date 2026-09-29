@@ -1,0 +1,227 @@
+[
+ {
+  "ref": "vercel-labs/skills/find-skills",
+  "gen": "Safe",
+  "socket": 0,
+  "snyk": "Med",
+  "husk": "SAFE",
+  "files": 1,
+  "findings": []
+ },
+ {
+  "ref": "mattpocock/skills/grill-me",
+  "gen": "Safe",
+  "socket": 0,
+  "snyk": "Low",
+  "husk": "SAFE",
+  "files": 2,
+  "findings": []
+ },
+ {
+  "ref": "mattpocock/skills/grill-with-docs",
+  "gen": "Safe",
+  "socket": 0,
+  "snyk": "Low",
+  "husk": "SAFE",
+  "files": 2,
+  "findings": []
+ },
+ {
+  "ref": "mattpocock/skills/improve-codebase-architecture",
+  "gen": "Safe",
+  "socket": 0,
+  "snyk": "Med",
+  "husk": "SAFE",
+  "files": 3,
+  "findings": []
+ },
+ {
+  "ref": "mattpocock/skills/tdd",
+  "gen": "Safe",
+  "socket": 0,
+  "snyk": "Low",
+  "husk": "SAFE",
+  "files": 4,
+  "findings": []
+ },
+ {
+  "ref": "vercel-labs/agent-browser/agent-browser",
+  "gen": "Safe",
+  "socket": 0,
+  "snyk": "Med",
+  "husk": "SAFE",
+  "files": 1,
+  "findings": []
+ },
+ {
+  "ref": "anthropics/skills/frontend-design",
+  "gen": "Safe",
+  "socket": 0,
+  "snyk": "Low",
+  "husk": "SAFE",
+  "files": 2,
+  "findings": []
+ },
+ {
+  "ref": "mattpocock/skills/setup-matt-pocock-skills",
+  "gen": "Safe",
+  "socket": 0,
+  "snyk": "Low",
+  "husk": "SAFE",
+  "files": 7,
+  "findings": []
+ },
+ {
+  "ref": "mattpocock/skills/handoff",
+  "gen": "Safe",
+  "socket": 0,
+  "snyk": "Low",
+  "husk": "SAFE",
+  "files": 2,
+  "findings": []
+ },
+ {
+  "ref": "mattpocock/skills/triage",
+  "gen": "Med",
+  "socket": 0,
+  "snyk": "Med",
+  "husk": "SAFE",
+  "files": 4,
+  "findings": []
+ },
+ {
+  "ref": "mattpocock/skills/prototype",
+  "gen": "Safe",
+  "socket": 0,
+  "snyk": "Low",
+  "husk": "SAFE",
+  "files": 4,
+  "findings": []
+ },
+ {
+  "ref": "mattpocock/skills/grilling",
+  "gen": "Safe",
+  "socket": 0,
+  "snyk": "Low",
+  "husk": "SAFE",
+  "files": 2,
+  "findings": []
+ },
+ {
+  "ref": "vercel-labs/agent-skills/vercel-react-best-practices",
+  "gen": "Safe",
+  "socket": 0,
+  "snyk": "Low",
+  "husk": "SAFE",
+  "files": 76,
+  "findings": []
+ },
+ {
+  "ref": "mattpocock/skills/teach",
+  "gen": "Safe",
+  "socket": 0,
+  "snyk": "Low",
+  "husk": "SAFE",
+  "files": 6,
+  "findings": []
+ },
+ {
+  "ref": "mattpocock/skills/domain-modeling",
+  "gen": "Safe",
+  "socket": 0,
+  "snyk": "Low",
+  "husk": "SAFE",
+  "files": 4,
+  "findings": []
+ },
+ {
+  "ref": "genmedia-labs/skills/video-edit",
+  "gen": "Safe",
+  "socket": 0,
+  "snyk": "Med",
+  "husk": "SAFE",
+  "files": 1,
+  "findings": []
+ },
+ {
+  "ref": "genmedia-labs/skills/ai-music",
+  "gen": "Safe",
+  "socket": 0,
+  "snyk": "Med",
+  "husk": "SAFE",
+  "files": 1,
+  "findings": []
+ },
+ {
+  "ref": "genmedia-labs/skills/ai-video-generation",
+  "gen": "Safe",
+  "socket": 0,
+  "snyk": "Med",
+  "husk": "SAFE",
+  "files": 1,
+  "findings": []
+ },
+ {
+  "ref": "genmedia-labs/skills/image-to-video",
+  "gen": "Safe",
+  "socket": 0,
+  "snyk": "Critical",
+  "husk": "SAFE",
+  "files": 1,
+  "findings": []
+ },
+ {
+  "ref": "genmedia-labs/skills/ai-image-generation",
+  "gen": "Safe",
+  "socket": 0,
+  "snyk": "Med",
+  "husk": "SAFE",
+  "files": 1,
+  "findings": []
+ },
+ {
+  "ref": "heygen-com/hyperframes/hyperframes-cli",
+  "gen": "Safe",
+  "socket": 0,
+  "snyk": "Med",
+  "husk": null,
+  "files": 0,
+  "findings": []
+ },
+ {
+  "ref": "mattpocock/skills/codebase-design",
+  "gen": "Safe",
+  "socket": 0,
+  "snyk": "Low",
+  "husk": "SAFE",
+  "files": 4,
+  "findings": []
+ },
+ {
+  "ref": "vercel-labs/agent-skills/web-design-guidelines",
+  "gen": "Safe",
+  "socket": 0,
+  "snyk": "Low",
+  "husk": "SAFE",
+  "files": 1,
+  "findings": []
+ },
+ {
+  "ref": "mattpocock/skills/diagnosing-bugs",
+  "gen": "Safe",
+  "socket": 0,
+  "snyk": "Low",
+  "husk": "SAFE",
+  "files": 3,
+  "findings": []
+ },
+ {
+  "ref": "flowkit-labs/skills/reddit-automation",
+  "gen": "Safe",
+  "socket": 0,
+  "snyk": "Med",
+  "husk": "SAFE",
+  "files": 1,
+  "findings": []
+ }
+]

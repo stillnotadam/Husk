@@ -204,8 +204,20 @@ def _curl_pipe_host_is_trusted(matched_text):
     m = _INSTALL_URL_RE.search(matched_text)
     if not m:
         return False
-    url = m.group(1).lower()
-    return any(host in url for host in TRUSTED_INSTALL_HOSTS)
+    # Compare the real hostname (and path prefix where one is listed), never a
+    # substring of the whole URL: "evil.com/?x=astral.sh", "astral.sh.evil.com"
+    # and "notbun.sh" must NOT count as trusted.
+    rest = m.group(1).lower()
+    host, _, path = rest.partition("/")
+    host = host.rsplit("@", 1)[-1].split(":", 1)[0]  # drop userinfo and port
+    path = "/" + path
+    for entry in TRUSTED_INSTALL_HOSTS:
+        t_host, _, t_path = entry.lower().partition("/")
+        if host != t_host:
+            continue
+        if not t_path or path.startswith("/" + t_path):
+            return True
+    return False
 
 
 def scan_for_dangerous_patterns(text):
@@ -449,14 +461,14 @@ def resolve_string_concatenation(text):
     var_map = {}
 
     # Pass 1: direct literal assignments
-    for m in re.finditer(r'\b(\w++)\s*+=\s*+"([^"\n]{0,4000})"', text):
+    for m in re.finditer(r'\b(?=(\w+))\1\s*=\s*"([^"\n]{0,4000})"', text):
         var_map[m.group(1)] = m.group(2)
 
     # Pass 2 (run twice to allow one level of chaining, e.g. c = a + b
     # where a and b were themselves resolved in pass 1):
     for _ in range(2):
         for m in re.finditer(
-            r'\b(\w++)\s*+=\s*+((?:\w++|"[^"\n]{0,4000}")(?:\s*+\+\s*+(?:\w++|"[^"\n]{0,4000}"))++)', text
+            r'\b(?=(\w+))\1\s*=\s*((?:\w+|"[^"\n]{0,4000}")(?:\s*\+\s*(?:\w+|"[^"\n]{0,4000}"))+)', text
         ):
             var_name, expr = m.group(1), m.group(2)
             tokens = re.findall(r'\w+|"[^"]*"', expr)
@@ -1048,7 +1060,7 @@ def find_fake_prerequisite_socialengineering(text):
     # sample using a plain `wget https://.../agent-helper.tar.gz`
     # command (no markdown link syntax, .tar.gz not in the original
     # extension list).
-    EXE_DOWNLOAD_LINK_PATTERN = r"(\[[^\[\]\n]{0,500}+\]\(https?://[^)\s]{1,2000}\.(zip|exe)\)|(?:wget|curl)\s++[\"']?https?://[^\s\"']{1,2000}\.(zip|exe|tar\.gz|tgz))"
+    EXE_DOWNLOAD_LINK_PATTERN = r"(\[[^\[\]\n]{0,500}\]\(https?://[^)\s]{1,2000}\.(zip|exe)\)|(?:wget|curl)\s+[\"']?https?://[^\s\"']{1,2000}\.(zip|exe|tar\.gz|tgz))"
 
     # Sub-pattern 1: paste-site + terminal execution instruction
     for match in re.finditer(PASTE_SITE_PATTERN, text, re.IGNORECASE):
@@ -3289,6 +3301,84 @@ def find_shell_startup_persistence(text):
     return out
 
 
+
+# ---- 1.3.5 blind-spot rules --------------------------------------------------
+# Each was measured on the full datasets before being added (11,225 malicious,
+# 4,249 legitimate skills). Rules that also hit legitimate skills (LaunchAgents,
+# cron, systemd user units) were deliberately NOT added: scheduling is a normal
+# thing for skills to do, and those patterns cost 9-13 false alarms each.
+
+_STARTUP_FOLDER = re.compile(r"""Start Menu['"\s/\\,]{1,6}Programs['"\s/\\,]{1,6}Startup""", re.I)
+_SCHTASKS = re.compile(r"schtasks(?:\.exe)?\s+/create|Register-ScheduledTask", re.I)
+_PY_RC_APPEND = re.compile(
+    r"""open\([^)\n]{0,80}(?:bashrc|zshrc|bash_profile|\.profile)[^)\n]{0,40},\s*['"]a['"]"""
+    r"""|(?:bashrc|zshrc|bash_profile)_?path[\s\S]{0,400}?open\(\s*\w*(?:rc|profile)\w*_path\s*,\s*['"]a['"]""", re.I)
+_PROSE_PERSIST = re.compile(
+    r"\bpersistence (?:establishment|layer infrastructure|mechanism)\b|\bestablish(?:es|ing)? (?:framework )?persistence\b"
+    r"|automatic execution on (?:system )?boot", re.I)
+_DETECTION_CONTEXT = re.compile(r"\b(?:detect|scan|audit|flag|monitor|alert|check(?:s|ing)? for|find(?:s|ing)?|block)\w*", re.I)
+_CRED_HUNT = re.compile(
+    r"""\bfind\s+(?:/|~|\$HOME|\$\{HOME\}|/home|/Users|/root)\S*[^\n|;]{0,120}-i?name\s+['"]?\*?(?:\.env\b|id_rsa|id_ed25519|\*\.pem|credentials|\.npmrc|\.pypirc|wallet)"""
+    r"""|(?:glob|rglob|walk)\([^\n]{0,80}(?:\*\*/)?(?:\.env['"]|id_rsa|\*\.pem|wallet\.dat|\.aws/credentials)""", re.I)
+_DL_CALL = re.compile(r"\b(?:urlretrieve|urlopen|requests\.get|fetch)\(", re.I)
+_LOAD_CALL = re.compile(
+    r"importlib\.(?:import_module|util\.spec_from_file_location)|__import__\(|exec\(open\(|runpy\.run_path"
+    r"""|subprocess\.(?:run|call|Popen)\(\[?\s*(?:sys\.executable|['"]python)""", re.I)
+_SELF_UPDATE = re.compile(
+    r"""(?:curl|wget|Invoke-WebRequest|iwr)\b[^\n]{0,200}https?://\S+\.md\b[^\n]{0,120}(?:>|-o\s|-O\s|--output|-OutFile)\s*\S*(?:skills?/|SKILL\.md|\.agents?/)""", re.I)
+
+
+def find_blindspot_persistence(text):
+    out = []
+    for rx, what in ((_STARTUP_FOLDER, "writes into the Windows Startup folder, so it runs at every login"),
+                     (_SCHTASKS, "creates a Windows scheduled task"),
+                     (_PY_RC_APPEND, "appends to a shell startup file (.bashrc/.zshrc/.profile) from code, so it runs in every new shell")):
+        m = rx.search(text)
+        if m:
+            out.append(f"Line {_line_no(text, m.start())}: {what} - a persistence mechanism ('{m.group(0)[:80].strip()}')")
+    for m in _PROSE_PERSIST.finditer(text):
+        ls = _bounded_rfind(text, "\n", m.start()) + 1
+        le = text.find("\n", m.end())
+        le = len(text) if le < 0 else le
+        if not _DETECTION_CONTEXT.search(text[ls:le]):   # scanners describing what they detect are fine
+            out.append(f"Line {_line_no(text, m.start())}: describes establishing persistence on the machine "
+                       f"('{m.group(0)}') - a skill has no reason to keep itself running after the task")
+            break
+    return out
+
+
+def find_credential_file_hunt(text):
+    m = _CRED_HUNT.search(text)
+    if not m:
+        return []
+    return [f"Line {_line_no(text, m.start())}: searches the filesystem for credential files ('{m.group(0)[:90].strip()}') "
+            "- hunting for keys and secrets outside the skill's own folder"]
+
+
+def find_download_then_load(text):
+    """Code that downloads something and then imports or runs a Python module.
+    Plain downloads are NOT flagged (legitimate skills download constantly);
+    a download followed within ~1,500 characters by loading code is."""
+    loads = [m.start() for _, m in zip(range(_MAX_MATCHES_PER_CHECK), _LOAD_CALL.finditer(text))]
+    if not loads:
+        return []
+    for _, d in zip(range(_MAX_MATCHES_PER_CHECK), _DL_CALL.finditer(text)):
+        i = _bisect.bisect_right(loads, d.start())
+        if i < len(loads) and loads[i] - d.start() <= 1500:
+            return [f"Line {_line_no(text, d.start())}: downloads content and then loads or runs it as code "
+                    f"(line {_line_no(text, loads[i])}) - a remote-module loader"]
+    return []
+
+
+def find_self_updating_skill(text):
+    """Soft (INFO) note: legitimate skills often re-download their own SKILL.md,
+    so this is not a hard flag - but updates fetched this way skip any review."""
+    m = _SELF_UPDATE.search(text)
+    if not m:
+        return []
+    return [SOFT_FINDING_MARKER + f"Line {_line_no(text, m.start())}: re-downloads skill instructions from the internet "
+            f"into a skills folder ('{m.group(0)[:90].strip()}') - future versions can change without review"]
+
 def scan_skill_file(path):
     try:
         with open(path, encoding="utf-8", errors="replace") as f:
@@ -3498,6 +3588,10 @@ def scan_skill_file(path):
     findings.extend(find_role_hijack(text))
     findings.extend(find_download_then_execute(text))
     findings.extend(find_shell_startup_persistence(text))
+    findings.extend(find_blindspot_persistence(text))
+    findings.extend(find_credential_file_hunt(text))
+    findings.extend(find_download_then_load(text))
+    findings.extend(find_self_updating_skill(text))
 
     # The credential-file-pattern rule reads a documentation file's example
     # snippets as if they were code. Measured on the benchmarks: when it is

@@ -5,19 +5,210 @@ testing sessions - this section is the current, accurate headline,
 everything below is the full supporting record (methodology, every
 competitor comparison, every bug found and fixed along the way).
 
+# 2026-09 head-to-head: Husk vs. 16 skill scanners, one shared sample
+
+This replaces the earlier per-tool comparison. Earlier runs gave each tool a different,
+often small, random sample (as few as 30 skills for Cisco), which made the rows hard to
+compare. This time every tool, Husk included, scanned **the same fixed sample**, at its
+**current version**, with **no LLM**, and was scored by **the same rules, fixed before any
+result was seen**.
+
+## Sample
+Seeded, fixed and reproducible (`benchmarks/competitors/sample.json`):
+- **300 confirmed-malicious skills**: 150 from MalSkillBench, 150 from the ASB-derived set
+- **249 hand-checked legitimate skills** (the curated baseline used throughout this project)
+- **150 legitimate skills from the MalSkillBench research set**
+
+## Scoring
+Every tool's output is reduced to one highest severity on a shared scale
+(none < info < low < medium < high < critical):
+- **strict**: flagged if the tool reports something **high or critical**, its own block level
+- **loose**: flagged if it reports anything **low or above** (pure "info" notes don't count)
+- Husk gives one verdict (flagged or not), counted the same way in both readings.
+
+Raw output for every tool and every skill is kept, so any row can be re-scored.
+
+## Slow tools and the shared subset
+Cisco and NVIDIA SkillSpector take 20-30 s per skill in the benchmark sandbox (much of it
+startup, or waiting on network lookups the sandbox blocks), so they ran on a fixed
+**200-skill subset** (the first 50 of each group). skillscan-security (0.7.0) was installed and
+run too, but took 35-60 s per skill here and did not complete in time, so it is **not ranked**
+rather than estimated; the harness can finish it on a faster machine. Husk and every other tool are
+also scored on that exact subset, so those comparisons are like for like. Cisco ran in its
+own batch mode (`scan-all`), which loads its rules once.
+
+## Tools that could not be compared on the same footing
+- **Need an LLM to run at all:** Vetix, Semia, Tencent AI-Infra-Guard's skill-scan. Not
+  comparable with static scanners; a no-LLM run would not be the tool as designed.
+- **Hosted services:** Mondoo AI Skill Check and ClawSecure. They look skills up in their own
+  databases, so they cannot scan these samples. Mondoo is compared separately below on the
+  skills it rates most dangerous.
+- **Needs a paid account token:** Snyk Agent Scan.
+- **Not scanners:** aptratcn/skill-audit and cloudflare/security-audit-skill are instructions
+  for an agent to follow; Parsewall scans documents, not skills.
+
+## Results
+
+### Full sample (699 skills), strict
+
+| Scanner | Reading | Malware caught | Hand-checked legit passed | Research benign passed |
+|---|---|---|---|---|
+| **Husk** 1.3.5 | strict | 67.3% (202/300) | 99.6% (248/249) | 93.3% (140/150) |
+| syedabbast/skill-scanner git HEAD | strict | 64.3% (193/300) | 86.7% (216/249) | 71.3% (107/150) |
+| SkillFortify 0.6.0 | strict | 59.7% (179/300) | 82.3% (205/249) | 32.0% (48/150) |
+| agent-audit 0.20.0 | strict | 53.0% (159/300) | 92.8% (231/249) | 87.3% (131/150) |
+| clawhub-bridge 5.1.0 | strict | 44.7% (134/300) | 80.7% (201/249) | 70.7% (106/150) |
+| skillfrisk 0.3.0 | strict | 42.0% (126/300) | 91.6% (228/249) | 76.0% (114/150) |
+| skillguard 1.0.0 | strict | 39.3% (118/300) | 70.3% (175/249) | 73.3% (110/150) |
+| skill-audit (npm) 0.1.1 | strict | 38.0% (114/300) | 91.2% (227/249) | 84.0% (126/150) |
+| agentscan-cli 1.2.2 | strict | 35.0% (105/300) | 93.2% (232/249) | 82.7% (124/150) |
+| agent-audit-kit 0.6.10 | strict | 27.3% (82/300) | 93.6% (233/249) | 72.0% (108/150) |
+| malwar 0.4.0 | strict | 24.9% (73/293), 7 no result | 92.0% (229/249) | 86.0% (129/150) |
+| SecureAI-Scan 0.11.0 | strict | 22.3% (67/300) | 99.6% (248/249) | 94.0% (141/150) |
+| skill-shielder git HEAD | strict | 21.7% (65/300) | 92.0% (229/249) | 76.0% (114/150) |
+| OpenTrApp Skill Firewall 2.0.0 | strict | 21.0% (62/295), 5 no result | 96.0% (237/247), 2 no result | 86.6% (129/149), 1 no result |
+| skill-security-scanner (Steffano198) git HEAD | strict | 0.0% (0/293), 7 no result | 100.0% (249/249) | 100.0% (150/150) |
+
+### Full sample (699 skills), loose
+
+| Scanner | Reading | Malware caught | Hand-checked legit passed | Research benign passed |
+|---|---|---|---|---|
+| agentscan-cli 1.2.2 | loose | 92.3% (277/300) | 3.2% (8/249) | 2.0% (3/150) |
+| agent-audit-kit 0.6.10 | loose | 92.0% (276/300) | 59.0% (147/249) | 17.3% (26/150) |
+| skill-shielder git HEAD | loose | 80.7% (242/300) | 73.9% (184/249) | 25.3% (38/150) |
+| syedabbast/skill-scanner git HEAD | loose | 78.0% (234/300) | 74.3% (185/249) | 3.3% (5/150) |
+| skill-audit (npm) 0.1.1 | loose | 68.3% (205/300) | 80.3% (200/249) | 63.3% (95/150) |
+| **Husk** 1.3.5 | strict | 67.3% (202/300) | 99.6% (248/249) | 93.3% (140/150) |
+| SkillFortify 0.6.0 | loose | 61.0% (183/300) | 81.5% (203/249) | 32.0% (48/150) |
+| skillguard 1.0.0 | loose | 56.7% (170/300) | 67.5% (168/249) | 4.0% (6/150) |
+| agent-audit 0.20.0 | loose | 56.0% (168/300) | 92.8% (231/249) | 81.3% (122/150) |
+| clawhub-bridge 5.1.0 | loose | 45.0% (135/300) | 80.7% (201/249) | 69.3% (104/150) |
+| skillfrisk 0.3.0 | loose | 42.7% (128/300) | 91.6% (228/249) | 75.3% (113/150) |
+| malwar 0.4.0 | loose | 25.3% (74/293), 7 no result | 92.0% (229/249) | 86.0% (129/150) |
+| SecureAI-Scan 0.11.0 | loose | 22.7% (68/300) | 99.2% (247/249) | 93.3% (140/150) |
+| OpenTrApp Skill Firewall 2.0.0 | loose | 21.4% (63/295), 5 no result | 94.7% (234/247), 2 no result | 86.6% (129/149), 1 no result |
+| skill-security-scanner (Steffano198) git HEAD | loose | 15.7% (46/293), 7 no result | 97.2% (242/249) | 84.0% (126/150) |
+
+### Same 200-skill subset, strict
+
+| Scanner | Reading | Malware caught | Hand-checked legit passed | Research benign passed |
+|---|---|---|---|---|
+| syedabbast/skill-scanner git HEAD | strict | 63.0% (63/100) | 78.0% (39/50) | 66.0% (33/50) |
+| **Husk** 1.3.5 | strict | 60.0% (60/100) | 98.0% (49/50) | 88.0% (44/50) |
+| NVIDIA SkillSpector 2.12.0 | strict | 58.3% (56/96), 4 no result | 65.1% (28/43), 7 no result | 70.0% (35/50) |
+| Cisco AI Defense skill-scanner 2.1.0 | strict | 51.6% (48/93) | 88.0% (44/50) | 88.0% (44/50) |
+| agent-audit 0.20.0 | strict | 50.0% (50/100) | 82.0% (41/50) | 86.0% (43/50) |
+| SkillFortify 0.6.0 | strict | 48.0% (48/100) | 62.0% (31/50) | 26.0% (13/50) |
+| clawhub-bridge 5.1.0 | strict | 41.0% (41/100) | 56.0% (28/50) | 64.0% (32/50) |
+| skillfrisk 0.3.0 | strict | 33.0% (33/100) | 84.0% (42/50) | 70.0% (35/50) |
+| agentscan-cli 1.2.2 | strict | 29.0% (29/100) | 82.0% (41/50) | 76.0% (38/50) |
+| skillguard 1.0.0 | strict | 29.0% (29/100) | 86.0% (43/50) | 74.0% (37/50) |
+| skill-audit (npm) 0.1.1 | strict | 28.0% (28/100) | 86.0% (43/50) | 86.0% (43/50) |
+| agent-audit-kit 0.6.10 | strict | 21.0% (21/100) | 84.0% (42/50) | 78.0% (39/50) |
+| skill-shielder git HEAD | strict | 21.0% (21/100) | 84.0% (42/50) | 84.0% (42/50) |
+| malwar 0.4.0 | strict | 19.4% (18/93), 7 no result | 88.0% (44/50) | 88.0% (44/50) |
+| SecureAI-Scan 0.11.0 | strict | 18.0% (18/100) | 98.0% (49/50) | 90.0% (45/50) |
+| OpenTrApp Skill Firewall 2.0.0 | strict | 14.1% (14/99), 1 no result | 93.9% (46/49), 1 no result | 84.0% (42/50) |
+| skill-security-scanner (Steffano198) git HEAD | strict | 0.0% (0/93), 7 no result | 100.0% (50/50) | 100.0% (50/50) |
+
+### Same 200-skill subset, loose
+
+| Scanner | Reading | Malware caught | Hand-checked legit passed | Research benign passed |
+|---|---|---|---|---|
+| agent-audit-kit 0.6.10 | loose | 92.0% (92/100) | 30.0% (15/50) | 18.0% (9/50) |
+| agentscan-cli 1.2.2 | loose | 92.0% (92/100) | 6.0% (3/50) | 0.0% (0/50) |
+| syedabbast/skill-scanner git HEAD | loose | 78.0% (78/100) | 54.0% (27/50) | 2.0% (1/50) |
+| NVIDIA SkillSpector 2.12.0 | loose | 76.0% (73/96), 4 no result | 46.5% (20/43), 7 no result | 42.0% (21/50) |
+| skill-shielder git HEAD | loose | 75.0% (75/100) | 48.0% (24/50) | 20.0% (10/50) |
+| Cisco AI Defense skill-scanner 2.1.0 | loose | 66.7% (62/93) | 72.0% (36/50) | 70.0% (35/50) |
+| skill-audit (npm) 0.1.1 | loose | 61.0% (61/100) | 62.0% (31/50) | 68.0% (34/50) |
+| **Husk** 1.3.5 | strict | 60.0% (60/100) | 98.0% (49/50) | 88.0% (44/50) |
+| agent-audit 0.20.0 | loose | 53.0% (53/100) | 82.0% (41/50) | 82.0% (41/50) |
+| SkillFortify 0.6.0 | loose | 49.0% (49/100) | 60.0% (30/50) | 26.0% (13/50) |
+| skillguard 1.0.0 | loose | 45.0% (45/100) | 80.0% (40/50) | 2.0% (1/50) |
+| clawhub-bridge 5.1.0 | loose | 41.0% (41/100) | 56.0% (28/50) | 64.0% (32/50) |
+| skillfrisk 0.3.0 | loose | 34.0% (34/100) | 84.0% (42/50) | 70.0% (35/50) |
+| malwar 0.4.0 | loose | 19.4% (18/93), 7 no result | 88.0% (44/50) | 88.0% (44/50) |
+| SecureAI-Scan 0.11.0 | loose | 19.0% (19/100) | 98.0% (49/50) | 90.0% (45/50) |
+| OpenTrApp Skill Firewall 2.0.0 | loose | 14.1% (14/99), 1 no result | 91.8% (45/49), 1 no result | 84.0% (42/50) |
+| skill-security-scanner (Steffano198) git HEAD | loose | 12.9% (12/93), 7 no result | 94.0% (47/50) | 72.0% (36/50) |
+
+
+## Mondoo AI Skill Check: the skills it rates most dangerous
+
+Mondoo is hosted and only scores skills already in its database, so it cannot scan the sample
+above. Instead: the **48 skills Mondoo lists as Critical (100/100)** on its "Highest risk" page
+(2026-09-29) were fetched from GitHub and scanned with Husk. 33 could be fetched (the rest sit
+in repositories too large to download, or hit GitHub's anonymous API limit).
+
+- **Husk flags 16 of 33**, for concrete reasons: `curl | bash` installers (one from an
+  unknown domain, one fetching privilege-escalation tooling), `eval`/`exec`, a skill capturing the whole
+  `process.env` and sending it over the network, a Burp Collaborator exfiltration domain.
+- **Husk passes 17.** Reviewed by hand, most are legitimate: penetration-testing
+  documentation, API keys read from the environment, CLI installers from their vendors. Mondoo's
+  "Critical" reflects what a skill *can* do rather than intent.
+- **Two of those are real Husk misses** (see blind spots below): a self-updating skill and one that
+  hunts `.env` files and reports to a Telegram bot.
+
+## skills.sh's commercial auditors (Gen, Socket, Snyk)
+A pilot on the 24 most-installed skills.sh skills with published audits: Husk agreed with Socket on
+24/24 and Gen on 23/24; Snyk rated 10 of them Medium risk or above. Every one of those was checked by
+hand and none were malicious. See `benchmarks/results/skillssh_auditors_2026-09-28.md`.
+
+## Reading this honestly
+- **Where Husk wins:** in strict mode on the full sample it catches the most malware of all
+  tools *and* has the fewest false alarms on the hand-checked legitimate skills. The only tool
+  that matches its false-alarm rate (SecureAI-Scan) catches about a third as much.
+- **Tools with higher raw catch rates** get there by flagging a large share of legitimate
+  skills (loose readings, or syedabbast/skill-scanner), which makes them triage lists rather
+  than automatic gates.
+- **Where Husk loses:** on the research-benign set SecureAI-Scan is slightly cleaner, and on
+  the 200-skill subset syedabbast/skill-scanner catches a few more malicious samples (at 11x
+  Husk's false-alarm rate on hand-checked skills).
+
+## Husk blind spots found in this round, and what 1.3.5 did about them
+Found by reading malicious samples Husk missed but two or more other tools caught, and
+Mondoo's highest-risk skills that Husk passed. Every new rule was measured on the full
+datasets (11,224 malicious, 4,249 legitimate) before being added.
+- **Persistence**: now caught through the Windows Startup folder, scheduled tasks, code
+  appending to shell startup files, and skills that describe establishing persistence
+  (0 legitimate hits). **Not added on purpose:** LaunchAgents, cron and systemd user
+  units, which legitimate skills use for scheduling (9-13 legitimate hits each).
+- **Generic downloaders**: a download followed by importing or running the fetched code
+  is now caught (0 legitimate hits). Plain downloads stay unflagged, which is why the
+  tools that flag them have 7-30% false-alarm rates.
+- **Credential hunting across the filesystem** (`find / -name .env`, key and wallet
+  globs): now caught (0 legitimate hits).
+- **Self-updating skills**: reported as an informational note, not a flag. 25 legitimate
+  skills re-download their own SKILL.md, so it is common practice, not an attack signal.
+
+Result on the head-to-head sample: 65.7% -> 67.3% of malware caught, no change on
+either legitimate set. On the full datasets: +99 malicious caught, 0 new false alarms.
+
+## Security bug found and fixed during this round
+Husk's trusted-installer allowlist compared a substring of the URL, so `evil.com/?x=astral.sh`
+or `astral.sh.evil.com` would have been treated as the trusted `astral.sh`. Fixed in 1.3.5; the
+fix changed no verdicts on the 699-skill sample.
+
+---
+
 ## Current real-world numbers (static analysis only, no LLM)
 
 | | Result |
 |---|---|
-| **MalSkillBench** recall (3,945 real malicious samples, full dataset) | **65.6% (2,589/3,945)** - held-out half: 65.2% |
-| **ASB-derived** recall (7,280 real malicious samples) | **63.8% (4,643/7,280)** - held-out official test split: 64.4% |
+| **MalSkillBench** recall (3,944 real malicious samples, full dataset) | **67.3% (2,653/3,944)** |
+| **ASB-derived** recall (7,280 real malicious samples) | **64.8% (4,717/7,280)** |
 | False positives, curated real-skill baseline (249 samples) | **248/249 (99.6%) clean** |
 | False positives, MalSkillBench benign set (4,000 samples, full dataset) | **95.4% (3,816/4,000) clean** |
 | Validation against an independent labeled corpus (cisco-ai-defense/skill-scanner, 27 fixtures) | **13/16 malicious caught, 0 false positives on 11 safe** |
 
-(v1.1.1 re-run from scratch on all 15,474 samples - see "v1.1.1: held-out
-re-benchmark" at the end of this file. The paragraph below describes the
-earlier 1.1.0 precision push.)
+(1.3.5 re-run from scratch on all 15,473 samples, 2026-09-29. Compared with the
+same code before the 1.3.5 detection rules: +99 malicious samples caught, 0
+legitimate samples newly flagged. Correction: earlier versions of this file and
+the website counted 3,945 MalSkillBench samples / 11,225 in total; one of those
+"samples" was the dataset's `_source_inventory.txt` metadata file. The real counts
+are 3,944 and 11,224. Sections further down are a dated log and keep the numbers
+measured at the time.)
 
 Recall traded down slightly from an earlier point
 (65.1%/63.3%) in exchange for real precision gains (89.5% -> 90.8% on
@@ -32,7 +223,7 @@ secondary story, and where it succeeds, credit belongs to whichever
 model actually made the call, not this project's own engineering (see
 README.md).
 
-## Competitors tested, honestly, head to head
+## Competitors tested (earlier runs, superseded by the 2026-09 head-to-head above)
 
 | Competitor | Result |
 |---|---|

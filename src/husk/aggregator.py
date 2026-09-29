@@ -43,6 +43,7 @@ import re
 import shutil
 import tarfile
 import tempfile
+import time
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -297,10 +298,135 @@ def _fetch_clawhub_skill_inner(skill_ref, workdir=None):
         return None, _describe_error(exc, slug)
 
 
+def _locate_skill_dir(tf, members, root, skill_subpath):
+    """skills.sh names a skill owner/repo/<skill>, but inside the repo the
+    skill often lives deeper (skills/<skill>/, packages/x/<skill>/). Find the
+    folder holding a SKILL.md whose folder name, or declared `name:`, matches;
+    prefer the shallowest. Returns the tar prefix to extract, or None."""
+    target = skill_subpath.strip("/").split("/")[-1].lower()
+    by_folder, by_name = [], []
+    for m in members:
+        if not m.isfile() or not m.name.endswith("/SKILL.md") or ".." in m.name:
+            continue
+        folder = m.name[: -len("SKILL.md")]
+        if folder.rstrip("/").split("/")[-1].lower() == target:
+            by_folder.append(folder)
+        elif m.size <= 64 * 1024:
+            try:
+                head = tf.extractfile(m).read(4096).decode("utf-8", "replace")
+            except Exception:  # noqa: BLE001,S112 - unreadable member, skip it
+                continue
+            nm = re.search(r"^name:\s*['\"]?([^'\"\n]+)", head, re.MULTILINE)
+            if nm and nm.group(1).strip().lower() == target:
+                by_name.append(folder)
+    found = by_folder or by_name
+    if not found:
+        return f"{root}/{skill_subpath.strip('/')}/"  # nothing better: keep the original (empty) match
+    return min(found, key=lambda f: (f.count("/"), len(f)))
+
+
 _MAX_GITHUB_DOWNLOAD_BYTES = 30 * 1024 * 1024
 _MAX_GITHUB_EXPANDED_BYTES = 50 * 1024 * 1024
 _MAX_GITHUB_FILES = 5000
 
+
+
+# ---- large repositories: fetch only one skill's folder ----------------------
+_TREE_CACHE: dict = {}    # "owner/repo" -> (timestamp, paths, truncated)
+_TREE_TTL = 3600
+_MAX_FOLDER_FILES = 300
+
+
+def _gh_api(url):
+    headers = {"User-Agent": "husk-scanner (+https://github.com/ctrl-adam/Husk)", "Accept": "application/vnd.github+json"}
+    token = os.environ.get("GITHUB_TOKEN")
+    if token:
+        headers["Authorization"] = f"Bearer {token}"
+    req = urllib.request.Request(url, headers=headers)  # noqa: S310 - fixed https://api.github.com URL
+    with urllib.request.urlopen(req, timeout=30) as resp:  # noqa: S310 - fixed api.github.com host
+        return json.loads(resp.read(20 * 1024 * 1024).decode("utf-8"))
+
+
+def _repo_tree(owner, repo):
+    key = f"{owner}/{repo}"
+    hit = _TREE_CACHE.get(key)
+    if hit and time.time() - hit[0] < _TREE_TTL:
+        return hit[1], hit[2]
+    d = _gh_api(f"https://api.github.com/repos/{owner}/{repo}/git/trees/HEAD?recursive=1")
+    paths = [e["path"] for e in d.get("tree", []) if e.get("type") == "blob"]
+    _TREE_CACHE[key] = (time.time(), paths, bool(d.get("truncated")))
+    return paths, bool(d.get("truncated"))
+
+
+def _folder_files_via_contents(owner, repo, base, budget):
+    """For trees GitHub truncates: list one folder with the contents API."""
+    out, stack = [], [base.rstrip("/")]
+    while stack and len(out) < budget:
+        cur = stack.pop()
+        try:
+            items = _gh_api(f"https://api.github.com/repos/{owner}/{repo}/contents/{urllib.parse.quote(cur)}")
+        except Exception:  # noqa: BLE001,S112 - a missing folder just yields nothing
+            continue
+        if not isinstance(items, list):
+            continue
+        for it in items:
+            if it.get("type") == "file":
+                out.append(it["path"])
+            elif it.get("type") == "dir":
+                stack.append(it["path"])
+    return out[:budget]
+
+
+def _fetch_github_folder(owner, repo, skill_subpath, workdir=None):
+    """Download only the folder holding <skill>/SKILL.md from a repository too
+    large to fetch whole. Same safety limits as the whole-repo path: no paths
+    outside the folder, capped file count, per-file size and total bytes."""
+    target = skill_subpath.strip("/").split("/")[-1].lower()
+    try:
+        paths, truncated = _repo_tree(owner, repo)
+    except Exception:  # noqa: BLE001 - API unavailable or rate limited
+        return None
+    cands = [p[: -len("SKILL.md")] for p in paths
+             if p.endswith("/SKILL.md") and p[: -len("/SKILL.md")].split("/")[-1].lower() == target]
+    if cands:
+        base = min(cands, key=lambda c: (c.count("/"), len(c)))
+        files = [p for p in paths if p.startswith(base)][:_MAX_FOLDER_FILES]
+    elif truncated:
+        files, base = [], None
+        for guess in (skill_subpath.strip("/"), f"skills/{target}", target, f".claude/skills/{target}",
+                      f".agents/skills/{target}", f"src/skills/{target}"):
+            files = _folder_files_via_contents(owner, repo, guess, _MAX_FOLDER_FILES)
+            if any(f.endswith("SKILL.md") for f in files):
+                base = guess.rstrip("/") + "/"
+                break
+        if not base:
+            return None
+    else:
+        return None
+    workdir = workdir or tempfile.mkdtemp(prefix="husk_github_")
+    root = os.path.realpath(workdir)
+    total = 0
+    for p in files:
+        rel = p[len(base):]
+        if not rel or ".." in rel.split("/") or rel.startswith("/"):
+            continue
+        dest = os.path.realpath(os.path.join(workdir, rel))
+        if not dest.startswith(root + os.sep):
+            continue
+        url = f"https://raw.githubusercontent.com/{owner}/{repo}/HEAD/{urllib.parse.quote(p)}"
+        try:
+            req = urllib.request.Request(url, headers={"User-Agent": "husk-scanner"})
+            with urllib.request.urlopen(req, timeout=30) as resp:  # noqa: S310 - fixed raw.githubusercontent.com host
+                blob = resp.read(4 * 1024 * 1024 + 1)
+        except Exception:  # noqa: BLE001,S112 - skip files that fail
+            continue
+        if len(blob) > 4 * 1024 * 1024 or total + len(blob) > _MAX_GITHUB_EXPANDED_BYTES:
+            continue
+        total += len(blob)
+        os.makedirs(os.path.dirname(dest), exist_ok=True)
+        with open(dest, "wb") as fh:
+            fh.write(blob)
+    return workdir if os.path.exists(os.path.join(workdir, "SKILL.md")) else None
 
 def _fetch_github_skill(owner_repo, skill_subpath=None, workdir=None):
     """Fetch a skill's real content from its GitHub repo (the actual source
@@ -332,6 +458,10 @@ def _fetch_github_skill(owner_repo, skill_subpath=None, workdir=None):
             break
         except Exception:  # noqa: BLE001,S112 - try the next branch
             continue
+    if data and len(data) > _MAX_GITHUB_DOWNLOAD_BYTES and skill_subpath:
+        # Too big to take whole (monorepos with hundreds of skills): fetch
+        # only this skill's folder instead of giving up.
+        return _fetch_github_folder(owner, repo, skill_subpath, workdir=workdir)
     if not data or len(data) > _MAX_GITHUB_DOWNLOAD_BYTES:
         return None
     workdir = workdir or tempfile.mkdtemp(prefix="husk_github_")
@@ -342,6 +472,8 @@ def _fetch_github_skill(owner_repo, skill_subpath=None, workdir=None):
                 return None
             root = members[0].name.split("/")[0]  # e.g. repo-main
             want = f"{root}/{skill_subpath.strip('/')}/" if skill_subpath else None
+            if want and not any(m.name.startswith(want) for m in members):
+                want = _locate_skill_dir(tf, members, root, skill_subpath)
             wrote = 0
             written_bytes = 0
             for m in members:

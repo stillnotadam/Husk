@@ -3,9 +3,9 @@ import io
 import os
 import zipfile
 
-from husk.package_scanner import safe_extract_zip, ArchiveTooLarge, scan_package
-
 import pytest
+
+from husk.package_scanner import ArchiveTooLarge, safe_extract_zip, scan_package
 
 
 def _bomb_bytes(mb=200):
@@ -76,6 +76,7 @@ def test_lookup_cleans_up_and_respects_size_budget(tmp_path, monkeypatch):
 
 def test_owned_temp_dir_only_matches_husk_folders(tmp_path):
     import tempfile
+
     from husk.aggregator import owned_temp_dir
     t = tempfile.gettempdir()
     d = tempfile.mkdtemp(prefix="husk_x_")
@@ -94,6 +95,7 @@ def test_failed_and_successful_clawhub_lookups_leave_nothing(monkeypatch):
     import glob
     import tempfile
     import zipfile as zf_mod
+
     import husk.aggregator as agg
     monkeypatch.setattr(agg, "EXTERNAL_SOURCES", {})
     before = set(glob.glob(os.path.join(tempfile.gettempdir(), "husk_*")))

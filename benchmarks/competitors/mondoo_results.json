@@ -1,0 +1,394 @@
+[
+ {
+  "ref": "modbender/skill-library-mcp/osint-investigator",
+  "husk": null
+ },
+ {
+  "ref": "ScrapeOps/scrapeops-scraping-assistant-claude-plugin/generate-scraper",
+  "husk": "SAFE",
+  "files": 4,
+  "findings": []
+ },
+ {
+  "ref": "firecrawl/ai-research-skills/nemo-evaluator",
+  "husk": "SAFE",
+  "files": 5,
+  "findings": []
+ },
+ {
+  "ref": "modbender/skill-library-mcp/everclaw",
+  "husk": null
+ },
+ {
+  "ref": "modbender/skill-library-mcp/linux-privilege-escalation",
+  "husk": null
+ },
+ {
+  "ref": "LeviReisJs/ruby-on-rails-skill-docs",
+  "husk": "FLAGGED",
+  "files": 12,
+  "findings": [
+   "'SKILL.md': Line 673: Uses eval() - runs code built at runtime ('eval(')",
+   "'references/security.md': Line 66: Ruby: executes a shell command (Kernel#exec/system/%x) ('system(\"convert #{params[:filename]}\"')",
+   "'references/security.md': Line 49: file references a credential-file pattern ('.env'); the file also opens files and makes network calls, but not close to this reference - worth a manual look rather than a hard flag.",
+   "'references/activerecord.md': Line 300: SQL query built with an f-string/string-concatenation passed directly to 'execute()' ('.execute(\n  \"EXPLAIN ANALYZE #{') instead of a parameterized query - allows SQL injection through any interpolated value that traces back to untrusted input."
+  ]
+ },
+ {
+  "ref": "modbender/skill-library-mcp/ethereum-gas-tracker",
+  "husk": null
+ },
+ {
+  "ref": "modbender/skill-library-mcp/authensor-gateway",
+  "husk": null
+ },
+ {
+  "ref": "sickn33/antigravity-awesome-skills/linux-privilege-escalation",
+  "husk": null
+ },
+ {
+  "ref": "firecrawl/ai-research-skills/lambda-labs",
+  "husk": "FLAGGED",
+  "files": 3,
+  "findings": [
+   "'references/advanced-usage.md': Line 606: file references a credential-file pattern ('.env') and opens files elsewhere - no network-send capability detected, so this is a softer flag worth a manual look.",
+   "'references/advanced-usage.md': Line 579: shell command substitution reads a credential-shaped file directly ('$(cat ~/.ssh/lambda_key_new.pub)') - a common shell-script credential-theft pattern, especially when combined with a network command nearby."
+  ]
+ },
+ {
+  "ref": "mit-network/Antigravity-awesome-skills/xss-html-injection",
+  "husk": null
+ },
+ {
+  "ref": "MustaphaSteph/vorec-plugins/record-tutorial",
+  "husk": "SAFE",
+  "files": 2,
+  "findings": []
+ },
+ {
+  "ref": "mit-network/Antigravity-awesome-skills/cloud-penetration-testing",
+  "husk": "SAFE",
+  "files": 2,
+  "findings": [],
+  "via": "folder-fetch",
+  "path": "skills/cloud-penetration-testing/"
+ },
+ {
+  "ref": "mit-network/Antigravity-awesome-skills/ssh-penetration-testing",
+  "husk": "SAFE",
+  "files": 1,
+  "findings": [],
+  "via": "folder-fetch",
+  "path": "skills/ssh-penetration-testing/"
+ },
+ {
+  "ref": "modbender/skill-library-mcp/metamask",
+  "husk": null
+ },
+ {
+  "ref": "modbender/skill-library-mcp/trip-protocol",
+  "husk": null
+ },
+ {
+  "ref": "mohammed-bfaisal/vibe-hardener",
+  "husk": "FLAGGED",
+  "files": 15,
+  "findings": [
+   "'SKILL.md': Line 152: Uses exec() - runs code built at runtime ('exec(')",
+   "'SKILL.md': Line 152: Uses eval() - runs code built at runtime ('eval(')",
+   "'SKILL.md': Line 786: Uses eval() - runs code built at runtime ('eval(')",
+   "'SKILL.md': Line 33: file references a credential-file pattern ('.env'); the file also opens files and makes network calls, but not close to this reference - worth a manual look rather than a hard flag.",
+   "'SKILL.md': Line 3319: runs a container with elevated privileges/capabilities - defeats normal container isolation ('--privileged').",
+   "'README.md': Line 260: Uses exec() - runs code built at runtime ('exec(')",
+   "'README.md': Line 466: Uses exec() - runs code built at runtime ('exec(')",
+   "'README.md': Line 260: Uses eval() - runs code built at runtime ('eval(')",
+   "'README.md': Line 466: Uses eval() - runs code built at runtime ('eval(')",
+   "'checklists/security.md': Line 48: Uses exec() - runs code built at runtime ('exec(')",
+   "'checklists/security.md': Line 48: Uses eval() - runs code built at runtime ('eval(')",
+   "'.claude/skills/vibe-hardener/SKILL.md': Line 152: Uses exec() - runs code built at runtime ('exec(')"
+  ]
+ },
+ {
+  "ref": "alejandro-ao/video-tool-cli/video-tool",
+  "husk": "SAFE",
+  "files": 6,
+  "findings": []
+ },
+ {
+  "ref": "modbender/skill-library-mcp/aleph-vm-replication",
+  "husk": "FLAGGED",
+  "files": 1,
+  "findings": [
+   "'SKILL.md': Line 268: Pipes a downloaded script directly into a shell ('curl -fsSL https://deb.nodesource.com/setup_22.x | bash')",
+   "'SKILL.md': Line 560: Pipes a downloaded script directly into a shell ('curl -fsSL https://deb.nodesource.com/setup_22.x | bash')"
+  ],
+  "via": "folder-fetch",
+  "path": "data/aleph-vm-replication/"
+ },
+ {
+  "ref": "modbender/skill-library-mcp/claws-network",
+  "husk": "SAFE",
+  "files": 14,
+  "findings": [],
+  "via": "folder-fetch",
+  "path": "data/claws-network/"
+ },
+ {
+  "ref": "modbender/skill-library-mcp/one-skill-to-rule-them-all",
+  "husk": "FLAGGED",
+  "files": 1,
+  "findings": [
+   "'SKILL.md': Line 827: unusually long hidden comment (196 chars) - worth a manual look, since legitimate comments in skill files are normally short.",
+   "'SKILL.md': Line 846: unusually long hidden comment (233 chars) - worth a manual look, since legitimate comments in skill files are normally short.",
+   "'SKILL.md': Line 81: overt instruction-override language ('Disregard all prior') - found in plain visible text, not hidden. This is classic prompt-injection phrasing that tells the agent to disregard its actual instructions; real attacks often state this openly rather than hiding it, betting the user won't read the whole file.",
+   "'SKILL.md': Line 94: instructs disabling the agent's own safety confirmations ('Safety bypass') - a self-propagating permission-escalation pattern: rather than attacking the system directly, it attacks the agent's own safety configuration so nothing that follows faces scrutiny.",
+   "'SKILL.md': Line 159: shell command substitution reads a credential-shaped file directly ('$(cat ~/.aws/credentials)') - a common shell-script credential-theft pattern, especially when combined with a network command nearby.",
+   "'SKILL.md': Line 787: shell command substitution reads a credential-shaped file directly ('$(cat ~/.aws/credentials)') - a common shell-script credential-theft pattern, especially when combined with a network command nearby.",
+   "'SKILL.md': Line 788: shell command substitution reads a credential-shaped file directly ('$(cat ~/.ssh/id_rsa | base64)') - a common shell-script credential-theft pattern, especially when combined with a network command nearby.",
+   "'SKILL.md': Line 323: writes a persistence payload into a shell startup file - it would silently affect every future shell session",
+   "'SKILL.md': Line 757: writes a persistence payload into a shell startup file - it would silently affect every future shell session"
+  ],
+  "via": "folder-fetch",
+  "path": "data/one-skill-to-rule-them-all/"
+ },
+ {
+  "ref": "modbender/skill-library-mcp/ssh-penetration-testing",
+  "husk": null
+ },
+ {
+  "ref": "sickn33/antigravity-awesome-skills/ssh-penetration-testing",
+  "husk": null
+ },
+ {
+  "ref": "0xPuncker/adp",
+  "husk": "FLAGGED",
+  "files": 191,
+  "findings": [
+   "'SKILL.md': Line 2171: Pipes a downloaded script directly into a shell ('curl -fsSL https://raw.githubusercontent.com/0xPuncker/adp/main/bin/install.sh | bash')",
+   "'README.md': Line 93: Pipes a downloaded script directly into a shell ('curl -fsSL https://raw.githubusercontent.com/0xPuncker/adp/main/bin/install.sh | bash')",
+   "'README.md': Line 115: Pipes a downloaded script directly into a shell ('curl -fsSL https://raw.githubusercontent.com/0xPuncker/adp/main/bin/install.sh | bash')",
+   "'install.sh': Line 5: Pipes a downloaded script directly into a shell ('curl -fsSL https://raw.githubusercontent.com/0xPuncker/adp/main/install.sh | bash')",
+   "'src/lifecycle/update.ts': Line 26: Pipes a downloaded script directly into a shell ('curl -fsSL ... | bash')",
+   "'src/lifecycle/update.ts': Line 71: Pipes a downloaded script directly into a shell ('curl -fsSL ${url} | bash')",
+   "'bin/install.sh': Line 5: Pipes a downloaded script directly into a shell ('curl -fsSL https://raw.githubusercontent.com/0xPuncker/adp/main/bin/install.sh | bash')",
+   "'bin/install.sh': Line 207: Pipes a downloaded script directly into a shell ('curl -fsSL ... | bash')"
+  ]
+ },
+ {
+  "ref": "eugeniughelbur/obsidian-second-brain",
+  "husk": "FLAGGED",
+  "files": 366,
+  "findings": [
+   "'SKILL.md': Line 73: Pipes a downloaded script directly into a shell ('curl -sL https://raw.githubusercontent.com/eugeniughelbur/obsidian-second-brain/main/scripts/quick-install.sh | bash')",
+   "'README.md': Line 659: Pipes a downloaded script directly into a shell ('curl -fsSL https://raw.githubusercontent.com/eugeniughelbur/obsidian-second-brain/main/scripts/quick-install.sh | bash')",
+   "'README.md': Line 220: large base64-like block (786 chars) - encoding text this way has no ordinary purpose in a skill file and is a common way to hide a payload from plain-text scanners.",
+   "'README.md': Line 983: large base64-like block (786 chars) - encoding text this way has no ordinary purpose in a skill file and is a common way to hide a payload from plain-text scanners.",
+   "'CHANGELOG.md': Line 151: Pipes a downloaded script directly into a shell ('curl | bash')",
+   "'CHANGELOG.md': Line 49: file references a credential-file pattern ('.env'); the file also opens files and makes network calls, but not close to this reference - worth a manual look rather than a hard flag.",
+   "'CHANGELOG.md': Line 418: overt secrecy language ('silently') combined with a data-movement action (post) in plain document text - a legitimate tool has no reason to instruct an agent to conceal a data-related action from the user.",
+   "'CHANGELOG.md': Line 219: references a browser cryptocurrency wallet extension ('phantom') alongside network-send capability - wallet extension storage contains seed phrases/private keys; there is no legitimate reason for a skill to locate and transmit this data.",
+   "'CHANGELOG.md': Line 427: hidden trigger or concealment tied to running a script ('silently in six ways. (1) `pyyaml` lived only in the script's PEP-723 header, so `uv run p') - a covert-execution pattern that makes the agent run code the user never asked for",
+   "'hooks/obsidian-bg-agent.sh': Line 105: Decodes base64 - common way to hide a payload ('base64 -d')",
+   "'scripts/quick-install.sh': Line 3: Pipes a downloaded script directly into a shell ('curl -fsSL https://raw.githubusercontent.com/eugeniughelbur/obsidian-second-brain/main/scripts/quick-install.sh | bash')",
+   "'scripts/quick-install.sh': Line 18: Pipes a downloaded script directly into a shell ('curl | bash')"
+  ]
+ },
+ {
+  "ref": "leeguooooo/chatgpt-imagegen",
+  "husk": "FLAGGED",
+  "files": 33,
+  "findings": [
+   "'SKILL.md': Line 77: Pipes a downloaded script directly into a shell ('curl -fsSL https://raw.githubusercontent.com/leeguooooo/chrome-use/main/install.sh | sh')",
+   "'SKILL.md': Line 323: Pipes a downloaded script directly into a shell ('curl -fsSL https://raw.githubusercontent.com/leeguooooo/plugins/main/upgrade-use-family.sh | sh')",
+   "'SKILL.md': Line 134: overt secrecy language ('silently') combined with a data-movement action (curl ) in plain document text - a legitimate tool has no reason to instruct an agent to conceal a data-related action from the user."
+  ]
+ },
+ {
+  "ref": "microsoft/power-cat-skills/eval-generator-gen-pages",
+  "husk": null
+ },
+ {
+  "ref": "mit-network/Antigravity-awesome-skills/linux-privilege-escalation",
+  "husk": "FLAGGED",
+  "files": 1,
+  "findings": [
+   "'SKILL.md': Line 149: Pipes a downloaded script directly into a shell ('curl -L https://github.com/carlospolop/PEASS-ng/releases/latest/download/linpeas.sh | sh')",
+   "'SKILL.md': Line 282: Decodes base64 - common way to hide a payload ('base64 -d')",
+   "'SKILL.md': Line 297: Decodes base64 - common way to hide a payload ('base64 -d')",
+   "'SKILL.md': Line 298: Decodes base64 - common way to hide a payload ('base64 -d')",
+   "'SKILL.md': Line 476: Decodes base64 - common way to hide a payload ('base64 -d')",
+   "'SKILL.md': Line 232: Ruby: executes a shell command (Kernel#exec/system/%x) ('system(\"/bin/bash\"')",
+   "'SKILL.md': Line 235: Ruby: executes a shell command (Kernel#exec/system/%x) ('system(\"/bin/bash\"')",
+   "'SKILL.md': Line 255: Ruby: executes a shell command (Kernel#exec/system/%x) ('system(\"/bin/bash\"')",
+   "'SKILL.md': Line 327: Ruby: executes a shell command (Kernel#exec/system/%x) ('system(\"/bin/bash\"')",
+   "'SKILL.md': Line 391: Ruby: executes a shell command (Kernel#exec/system/%x) ('system(\"/bin/bash\"')",
+   "'SKILL.md': Line 281: file references a credential-file pattern ('/etc/shadow'), and this file also opens files and has network-send capability - this matches the documented credential-harvesting pattern (scan for secrets, then exfiltrate), even though the file-open call isn't textually adjacent to the credential filename (e.g. paths defined in a list, opened later via a loop variable).",
+   "'SKILL.md': Line 418: redirects a file descriptor to a socket's fileno() via os.dup2() - the canonical reverse-shell pattern (redirecting stdin/stdout/stderr to a network socket, typically followed by spawning an interactive shell), with essentially no legitimate use in an ordinary skill."
+  ],
+  "via": "folder-fetch",
+  "path": "skills/linux-privilege-escalation/"
+ },
+ {
+  "ref": "mit-network/Antigravity-awesome-skills/wordpress-penetration-testing",
+  "husk": "FLAGGED",
+  "files": 1,
+  "findings": [
+   "'SKILL.md': Line 347: Uses exec() - runs code built at runtime ('exec(')",
+   "'SKILL.md': Line 347: reverse-shell pattern - redirects a shell's input/output to a raw network socket ('bash -i >& /dev/tcp/'), giving an attacker interactive control of the machine."
+  ],
+  "via": "folder-fetch",
+  "path": "skills/wordpress-penetration-testing/"
+ },
+ {
+  "ref": "modbender/skill-library-mcp/ai-collab",
+  "husk": "SAFE",
+  "files": 10,
+  "findings": [],
+  "via": "folder-fetch",
+  "path": "data/ai-collab/"
+ },
+ {
+  "ref": "modbender/skill-library-mcp/clawfriend",
+  "husk": "FLAGGED",
+  "files": 28,
+  "findings": [
+   "'scripts/utils.js': Line 21: file references a credential-file pattern ('.env'), and this file also opens files and has network-send capability - this matches the documented credential-harvesting pattern (scan for secrets, then exfiltrate), even though the file-open call isn't textually adjacent to the credential filename (e.g. paths defined in a list, opened later via a loop variable)."
+  ],
+  "via": "folder-fetch",
+  "path": "data/clawfriend/"
+ },
+ {
+  "ref": "modbender/skill-library-mcp/moltarena",
+  "husk": "FLAGGED",
+  "files": 1,
+  "findings": [
+   "'SKILL.md': Line 15: Pipes a downloaded script directly into a shell ('curl -sL molt-arena.com/skill | bash')",
+   "'SKILL.md': Line 36: Pipes a downloaded script directly into a shell ('curl -sL molt-arena.com/skill | bash')",
+   "'SKILL.md': Line 42: Pipes a downloaded script directly into a shell ('curl -sL molt-arena.com/skill | bash')",
+   "'SKILL.md': Line 48: Pipes a downloaded script directly into a shell ('curl -sL molt-arena.com/skill | bash')",
+   "'SKILL.md': Line 122: Pipes a downloaded script directly into a shell ('curl -sL molt-arena.com/skill \\| bash')",
+   "'SKILL.md': Line 123: Pipes a downloaded script directly into a shell ('curl -sL molt-arena.com/skill \\| bash')",
+   "'SKILL.md': Line 124: Pipes a downloaded script directly into a shell ('curl -sL molt-arena.com/skill \\| bash')"
+  ],
+  "via": "folder-fetch",
+  "path": "data/moltarena/"
+ },
+ {
+  "ref": "modbender/skill-library-mcp/moltpay",
+  "husk": "SAFE",
+  "files": 6,
+  "findings": [],
+  "via": "folder-fetch",
+  "path": "data/moltpay/"
+ },
+ {
+  "ref": "sickn33/antigravity-awesome-skills/wordpress-penetration-testing",
+  "husk": null
+ },
+ {
+  "ref": "Apeironics/prompt-refine-skill",
+  "husk": "SAFE",
+  "files": 72,
+  "findings": []
+ },
+ {
+  "ref": "inference-sh/skills/agent-tools",
+  "husk": "SAFE",
+  "files": 5,
+  "findings": []
+ },
+ {
+  "ref": "modbender/skill-library-mcp/atlas-argos-teste",
+  "husk": "SAFE",
+  "files": 1,
+  "findings": [],
+  "via": "folder-fetch",
+  "path": "data/atlas-argos-teste/"
+ },
+ {
+  "ref": "modbender/skill-library-mcp/clawbet",
+  "husk": "SAFE",
+  "files": 14,
+  "findings": [],
+  "via": "folder-fetch",
+  "path": "data/clawbet/"
+ },
+ {
+  "ref": "modbender/skill-library-mcp/compact-state",
+  "husk": "FLAGGED",
+  "files": 2,
+  "findings": [
+   "'molt-tools.js': Line 111: captures the entire process.env object ('{ ...process.env') and this file also sends data over the network / base64-encodes it - bulk exfiltration of every environment secret the process holds, which has no legitimate use."
+  ],
+  "via": "folder-fetch",
+  "path": "data/compact-state/"
+ },
+ {
+  "ref": "modbender/skill-library-mcp/devinism",
+  "husk": "FLAGGED",
+  "files": 1,
+  "findings": [
+   "'SKILL.md': Line 95: Pipes a downloaded script directly into a shell ('curl -sSL https://gist.githubusercontent.com/stevenhao/40a304ef7135f3156e056d589d12a5c8/raw/install.sh | bash')"
+  ],
+  "via": "folder-fetch",
+  "path": "data/devinism/"
+ },
+ {
+  "ref": "modbender/skill-library-mcp/inference-sh",
+  "husk": "SAFE",
+  "files": 5,
+  "findings": [],
+  "via": "folder-fetch",
+  "path": "data/inference-sh/"
+ },
+ {
+  "ref": "modbender/skill-library-mcp/loki-mode",
+  "husk": "SAFE",
+  "files": 1,
+  "findings": [],
+  "via": "folder-fetch",
+  "path": "data/loki-mode/"
+ },
+ {
+  "ref": "modbender/skill-library-mcp/rent-a-person-ai",
+  "husk": null
+ },
+ {
+  "ref": "modbender/skill-library-mcp/vigil",
+  "husk": null
+ },
+ {
+  "ref": "monoes/monomind/hooks-automation",
+  "husk": "SAFE",
+  "files": 1,
+  "findings": []
+ },
+ {
+  "ref": "agentspan-ai/agentspan-skills/agentspan",
+  "husk": "FLAGGED",
+  "files": 9,
+  "findings": [
+   "'SKILL.md': Line 27: Pipes a downloaded script directly into a shell ('curl -sSL https://raw.githubusercontent.com/agentspan-ai/agentspan-skills/main/install.sh | bash')"
+  ]
+ },
+ {
+  "ref": "costrict-plugins-repo/mukul975-anthropic-cybersecurity-skills-cybersecurity-skills/exploiting-server-side-request-forgery",
+  "husk": "FLAGGED",
+  "files": 4,
+  "findings": [
+   "'SKILL.md': Line 71: endpoint points at an out-of-band interaction/exfiltration testbed domain ('http://abc123.burpcollaborator.net') - services like oast.fun, Beeceptor, Pipedream and Burp Collaborator exist to capture exfiltrated data or callbacks during security testing; a skill shipping one is a near-certain data-exfiltration or C2 beacon.",
+   "'SKILL.md': Line 77: endpoint points at an out-of-band interaction/exfiltration testbed domain ('http://abc123.oast.fun') - services like oast.fun, Beeceptor, Pipedream and Burp Collaborator exist to capture exfiltrated data or callbacks during security testing; a skill shipping one is a near-certain data-exfiltration or C2 beacon.",
+   "'SKILL.md': Line 85: endpoint points at an out-of-band interaction/exfiltration testbed domain ('http://abc123.oast.fun') - services like oast.fun, Beeceptor, Pipedream and Burp Collaborator exist to capture exfiltrated data or callbacks during security testing; a skill shipping one is a near-certain data-exfiltration or C2 beacon.",
+   "'SKILL.md': Line 178: endpoint points at an out-of-band interaction/exfiltration testbed domain ('http://spoofed.burpcollaborator.net') - services like oast.fun, Beeceptor, Pipedream and Burp Collaborator exist to capture exfiltrated data or callbacks during security testing; a skill shipping one is a near-certain data-exfiltration or C2 beacon.",
+   "'scripts/agent.py': Line 20: fetches the cloud instance-metadata endpoint ('http://169.254.169.254/latest/meta-data') - the standard SSRF path to a machine's temporary cloud credentials (AWS/GCP IAM); a skill has no legitimate reason to read it.",
+   "'scripts/agent.py': Line 21: fetches the cloud instance-metadata endpoint ('http://169.254.169.254/latest/meta-data/iam/security-cr') - the standard SSRF path to a machine's temporary cloud credentials (AWS/GCP IAM); a skill has no legitimate reason to read it.",
+   "'scripts/agent.py': Line 22: fetches the cloud instance-metadata endpoint ('metadata.google.internal/computeMetadata') - the standard SSRF path to a machine's temporary cloud credentials (AWS/GCP IAM); a skill has no legitimate reason to read it."
+  ]
+ },
+ {
+  "ref": "inference-sh/skills/infsh-cli",
+  "husk": "SAFE",
+  "files": 5,
+  "findings": []
+ }
+]
