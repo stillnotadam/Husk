@@ -328,6 +328,7 @@ def _locate_skill_dir(tf, members, root, skill_subpath):
 _MAX_GITHUB_DOWNLOAD_BYTES = 30 * 1024 * 1024
 _MAX_GITHUB_EXPANDED_BYTES = 50 * 1024 * 1024
 _MAX_GITHUB_FILES = 5000
+_MAX_GITHUB_FILE_BYTES = 4 * 1024 * 1024
 
 
 
@@ -417,10 +418,10 @@ def _fetch_github_folder(owner, repo, skill_subpath, workdir=None):
         try:
             req = urllib.request.Request(url, headers={"User-Agent": "husk-scanner"})
             with urllib.request.urlopen(req, timeout=30) as resp:  # noqa: S310 - fixed raw.githubusercontent.com host
-                blob = resp.read(4 * 1024 * 1024 + 1)
+                blob = resp.read(_MAX_GITHUB_FILE_BYTES + 1)
         except Exception:  # noqa: BLE001,S112 - skip files that fail
             continue
-        if len(blob) > 4 * 1024 * 1024 or total + len(blob) > _MAX_GITHUB_EXPANDED_BYTES:
+        if len(blob) > _MAX_GITHUB_FILE_BYTES or total + len(blob) > _MAX_GITHUB_EXPANDED_BYTES:
             continue
         total += len(blob)
         os.makedirs(os.path.dirname(dest), exist_ok=True)
@@ -481,26 +482,30 @@ def _fetch_github_skill(owner_repo, skill_subpath=None, workdir=None):
                     continue
                 # hard caps: a tiny gzip can expand to gigabytes or to a
                 # million empty files; stop well before either hurts the host
-                if wrote >= _MAX_GITHUB_FILES or written_bytes + m.size > _MAX_GITHUB_EXPANDED_BYTES:
+                if wrote >= _MAX_GITHUB_FILES or written_bytes + min(m.size, _MAX_GITHUB_FILE_BYTES) > _MAX_GITHUB_EXPANDED_BYTES:
                     break
                 name = m.name
-                if name.startswith("/") or ".." in name.split("/"):
-                    continue
                 if want and not name.startswith(want):
-                    continue
-                if m.size > 4 * 1024 * 1024:
                     continue
                 # strip the leading root (and skill subpath, if any) for a clean tree
                 rel = name[len(want):] if want else name[len(root) + 1:]
                 if not rel:
                     continue
-                dest = os.path.join(workdir, rel)
-                os.makedirs(os.path.dirname(dest) or workdir, exist_ok=True)
+                # Git allows backslashes in names and codeload keeps them, so
+                # "..\..\x" or "C:/x" would escape workdir on Windows. Resolve
+                # the real target and require it to stay inside.
+                dest = os.path.realpath(os.path.join(workdir, rel))
+                if not _inside(workdir, dest) or dest == os.path.realpath(workdir):
+                    continue
+                os.makedirs(os.path.dirname(dest), exist_ok=True)
                 try:
                     with open(dest, "wb") as fh:
-                        fh.write(tf.extractfile(m).read())
+                        # Oversized files keep their first 4 MB instead of being
+                        # skipped: a payload at the top of a padded file must
+                        # still be scanned.
+                        fh.write(tf.extractfile(m).read(_MAX_GITHUB_FILE_BYTES))
                     wrote += 1
-                    written_bytes += m.size
+                    written_bytes += min(m.size, _MAX_GITHUB_FILE_BYTES)
                 except Exception:  # noqa: BLE001,S112
                     continue
             return workdir if wrote else None
