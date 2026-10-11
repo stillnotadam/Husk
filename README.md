@@ -19,7 +19,7 @@ Underneath is a detection engine with **real AST-based taint analysis for both P
 `husk gate` turns a scan into one deterministic **pass / fail** decision - offline, in seconds, no API key, no secrets. It's the check to run *before* a skill is published, and in CI on every push. Add this to `.github/workflows/husk.yml`:
 
 ```yaml
-- uses: actions/checkout@v4
+- uses: actions/checkout@v7
 - uses: ctrl-adam/Husk/action@main
   with: { block-on: "high" }
 ```
@@ -271,7 +271,7 @@ jobs:
   husk-scan:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: ctrl-adam/Husk/action@main
         with:
           path: "."
