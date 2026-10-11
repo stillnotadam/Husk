@@ -909,7 +909,14 @@ def aggregate_skill_opinions(skill_ref, marketplace="clawhub", local_path=None, 
                 "findings": result["findings"],
             }
         except Exception as e:
-            opinions["husk"] = {"available": False, "error": str(e)}
+            # Fail closed: content that crashes the scanner is a finding,
+            # not "no opinion" - otherwise a booby-trapped file blanks Husk
+            # out of the summary and the skill looks clean.
+            opinions["husk"] = {
+                "available": True, "flagged": True, "verdict": "ERROR",
+                "findings": [f"Husk's scan crashed on this skill ({type(e).__name__}: {e}) - "
+                             f"treat it as unverified."],
+            }
     else:
         opinions["husk"] = {
             "available": False,
