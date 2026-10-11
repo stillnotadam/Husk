@@ -392,7 +392,13 @@ def _interpreter_for(script_abs_path):
     ext = os.path.splitext(script_abs_path)[1].lower()
     if ext in COMPILERS:
         return []
-    return LANGUAGE_INTERPRETERS.get(ext)
+    interpreter = LANGUAGE_INTERPRETERS.get(ext)
+    if not interpreter:
+        return interpreter
+    # Resolve to an absolute path with the caller's PATH: the sandboxed
+    # process gets PATH=/usr/bin:/bin, so a node or ruby installed in
+    # /usr/local/bin (GitHub's runners) or ~/.local was "not found".
+    return [shutil.which(interpreter[0]) or interpreter[0]] + interpreter[1:]
 
 
 def _build_sandbox_command(script_abs_path, workdir, interpreter):
