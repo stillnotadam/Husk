@@ -34,8 +34,14 @@ from datetime import datetime, timezone
 
 from . import __version__ as _pkg_version
 from .gate import DEFAULT_POLICY, evaluate
-from .package_scanner import PACKAGE_SCANNABLE_EXTENSIONS
 from .reporting import derive_rule_id
+
+# The extension list v1 manifests were computed over, frozen so old
+# attestations keep verifying when the scanner's own list grows.
+PACKAGE_SCANNABLE_EXTENSIONS_V1 = (
+    ".md", ".txt", ".yaml", ".yml", ".py", ".json", ".js", ".ts", ".sh",
+    ".rs", ".go", ".rb", ".ps1", ".toml", ".cmd", ".bat", ".mdc",
+)
 
 # The in-toto Statement type and our predicate type. The Statement type is the
 # real, stable v1 identifier; the predicate type is Husk's own namespace under
@@ -46,21 +52,42 @@ HUSK_PREDICATE_TYPE = "https://husk.zone/attestation/skill-scan/v1"
 HUSK_VERSION = _pkg_version
 
 
-def _canonical_manifest(package_path):
-    """A deterministic list of (relative_posix_path, sha256) for every
-    scannable file in the package, sorted by path. This is what the subject
-    digest is computed over, so the attestation is bound to the exact bytes
-    of the skill, independent of filesystem order or absolute location."""
+# Subject manifest format. v1 hashed only files with a scannable text
+# extension, so swapping a bundled zip, PDF, pickle or extensionless script
+# left the digest unchanged; it also joined entries with newlines, which a
+# filename containing a newline could forge. v2 covers every file and
+# JSON-encodes the list. v1 is kept only to verify old attestations.
+MANIFEST_VERSION = 2
+
+
+def _canonical_manifest(package_path, version=MANIFEST_VERSION, exclude=()):
+    """A deterministic list of (relative_posix_path, sha256) for every file
+    in the package, sorted by path. This is what the subject digest is
+    computed over, so the attestation is bound to the exact bytes of the
+    skill, independent of filesystem order or absolute location. A symlink
+    is recorded by its target path, never followed.
+
+    v2 skips `.git/` (it differs between checkouts of identical content) and
+    any path in `exclude` - the attestation file itself when it is written
+    inside the package."""
+    excluded = {os.path.realpath(p) for p in exclude if p}
     entries = []
-    for dirpath, _dirs, filenames in os.walk(package_path):
+    for dirpath, dirs, filenames in os.walk(package_path):
+        if version >= 2:
+            dirs[:] = [d for d in dirs if d != ".git"]
         for name in sorted(filenames):
-            if not name.lower().endswith(PACKAGE_SCANNABLE_EXTENSIONS):
+            if version == 1 and not name.lower().endswith(PACKAGE_SCANNABLE_EXTENSIONS_V1):
                 continue
             full = os.path.join(dirpath, name)
+            if os.path.realpath(full) in excluded:
+                continue
             rel = os.path.relpath(full, package_path).replace(os.sep, "/")
             try:
-                with open(full, "rb") as fh:
-                    digest = hashlib.sha256(fh.read()).hexdigest()
+                if version >= 2 and os.path.islink(full):
+                    digest = "symlink:" + hashlib.sha256(os.readlink(full).encode("utf-8")).hexdigest()
+                else:
+                    with open(full, "rb") as fh:
+                        digest = hashlib.sha256(fh.read()).hexdigest()
             except OSError:
                 continue
             entries.append((rel, digest))
@@ -68,12 +95,15 @@ def _canonical_manifest(package_path):
     return entries
 
 
-def compute_subject_digest(package_path):
+def compute_subject_digest(package_path, version=MANIFEST_VERSION, exclude=()):
     """SHA-256 over the canonical manifest - a single stable identifier for
     the skill's content. Two checkouts of the same skill on different machines
     yield the same digest; any file change yields a different one."""
-    manifest = _canonical_manifest(package_path)
-    blob = "\n".join(f"{rel} {digest}" for rel, digest in manifest).encode("utf-8")
+    manifest = _canonical_manifest(package_path, version, exclude)
+    if version == 1:
+        blob = "\n".join(f"{rel} {digest}" for rel, digest in manifest).encode("utf-8")
+    else:
+        blob = json.dumps(manifest, separators=(",", ":"), ensure_ascii=True).encode("utf-8")
     return hashlib.sha256(blob).hexdigest(), manifest
 
 
@@ -84,7 +114,8 @@ def compute_ruleset_digest():
     is what lets a consumer say 'this was scanned by a ruleset I trust'."""
     here = os.path.dirname(os.path.abspath(__file__))
     rule_files = ["skill_scanner.py", "package_scanner.py", "taint_analysis.py",
-                  "pickle_scanner.py", "gate.py"]
+                  "pickle_scanner.py", "gate.py", "js_taint_analysis.py",
+                  "pdf_extract.py", "context_classifier.py"]
     hasher = hashlib.sha256()
     for name in rule_files:
         path = os.path.join(here, name)
@@ -98,8 +129,8 @@ def compute_ruleset_digest():
     return hasher.hexdigest()
 
 
-def build_attestation(package_path, findings, policy=None, skill_ref=None,
-                      timestamp=None):
+def build_attestation(package_path, findings, policy=None, skill_ref=None,  # noqa: PLR0913 - exclude is keyword-only
+                      timestamp=None, *, exclude=()):
     """
     Build an in-toto Statement v1 attesting to a Husk scan of a skill.
 
@@ -112,7 +143,7 @@ def build_attestation(package_path, findings, policy=None, skill_ref=None,
     Returns the Statement as a dict, ready to json.dump.
     """
     policy = policy or DEFAULT_POLICY
-    subject_digest, manifest = compute_subject_digest(package_path)
+    subject_digest, manifest = compute_subject_digest(package_path, exclude=exclude)
     ruleset_digest = compute_ruleset_digest()
     result = evaluate(findings, policy)
 
@@ -134,10 +165,13 @@ def build_attestation(package_path, findings, policy=None, skill_ref=None,
         "policy": {
             "blockOn": policy.get("block_on", "high"),
             "warnOn": policy.get("warn_on", "medium"),
+            "ignore": sorted(policy.get("ignore", [])),
+            "examplePaths": sorted(policy.get("example_paths", [])),
         },
         "severityCounts": result["counts"],
         "firedRules": fired_rules,
         "fileCount": len(manifest),
+        "subjectManifest": f"v{MANIFEST_VERSION}",
     }
     if timestamp is not None:
         predicate["verifiedAt"] = timestamp
@@ -164,7 +198,7 @@ def now_timestamp():
     return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
-def verify_attestation(package_path, statement):
+def verify_attestation(package_path, statement, exclude=()):
     """
     Re-derive the skill's digest and (optionally) the ruleset digest from the
     package on disk and check them against a claimed attestation. Returns a
@@ -186,8 +220,18 @@ def verify_attestation(package_path, statement):
         result["errors"].append("attestation has no sha256 subject digest")
         return result
 
-    actual_digest, _ = compute_subject_digest(package_path)
+    predicate = statement.get("predicate") or {}
+    manifest_tag = str(predicate.get("subjectManifest", "v1"))
+    version = 2 if manifest_tag == "v2" else 1
+    actual_digest, _ = compute_subject_digest(package_path, version, exclude)
     result["subject_match"] = (actual_digest == claimed)
+    result["manifest_version"] = version
+    if version == 1:
+        result["errors"].append(
+            "legacy (v1) attestation: its digest covers only text/code files, so "
+            "bundled archives, PDFs and extensionless files are not bound by it. "
+            "Re-attest with this Husk version."
+        )
     result["actual_digest"] = actual_digest
     result["claimed_digest"] = claimed
     if not result["subject_match"]:
@@ -196,7 +240,6 @@ def verify_attestation(package_path, statement):
             "attestation was made for (it was modified, or this is a different skill)."
         )
 
-    predicate = statement.get("predicate") or {}
     claimed_ruleset = ((predicate.get("scanner") or {}).get("rulesetDigest") or {}).get("sha256")
     if claimed_ruleset:
         actual_ruleset = compute_ruleset_digest()

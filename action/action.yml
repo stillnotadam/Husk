@@ -77,11 +77,11 @@ runs:
         HUSK_BLOCK_ON: ${{ inputs.block-on }}
       run: |
         set +e
-        husk gate "$HUSK_PATH" --block-on "$HUSK_BLOCK_ON" --json > husk-gate.json
+        husk gate "$HUSK_PATH" --block-on "$HUSK_BLOCK_ON" --json > "$RUNNER_TEMP/husk-gate.json"
         CODE=$?
         python3 - <<'PY' >> "$GITHUB_OUTPUT"
-        import json
-        d = json.load(open("husk-gate.json"))
+        import json, os
+        d = json.load(open(os.path.join(os.environ["RUNNER_TEMP"], "husk-gate.json")))
         c = d["counts"]
         print(f"decision={d['decision']}")
         print(f"summary={c['critical']} critical, {c['high']} high, {c['medium']} medium, {c['low']} low, {c['info']} info")
@@ -95,14 +95,14 @@ runs:
       shell: bash
       env:
         HUSK_PATH: ${{ inputs.path }}
-      run: husk attest "$HUSK_PATH" --output husk-attestation.json || true
+      run: husk attest "$HUSK_PATH" --output "$RUNNER_TEMP/husk-attestation.json" || true
 
     - name: Upload attestation
       if: always() && inputs.attest == 'true'
       uses: actions/upload-artifact@v7
       with:
         name: husk-attestation
-        path: husk-attestation.json
+        path: ${{ runner.temp }}/husk-attestation.json
         if-no-files-found: ignore
 
     - name: Write SARIF
@@ -113,16 +113,16 @@ runs:
         HUSK_PATH: ${{ inputs.path }}
       run: |
         if [ -n "$VIRUSTOTAL_API_KEY" ]; then
-          husk package "$HUSK_PATH" --output husk-report.sarif --virustotal || true
+          husk package "$HUSK_PATH" --output "$RUNNER_TEMP/husk-report.sarif" --virustotal || true
         else
-          husk package "$HUSK_PATH" --output husk-report.sarif || true
+          husk package "$HUSK_PATH" --output "$RUNNER_TEMP/husk-report.sarif" || true
         fi
 
     - name: Upload SARIF
       if: always() && inputs.sarif == 'true'
       uses: github/codeql-action/upload-sarif@v4
       with:
-        sarif_file: husk-report.sarif
+        sarif_file: ${{ runner.temp }}/husk-report.sarif
 
     - name: Comment on PR
       if: always() && inputs.comment-on-pr == 'true' && github.event_name == 'pull_request'
@@ -131,7 +131,7 @@ runs:
         script: |
           const fs = require('fs');
           let d;
-          try { d = JSON.parse(fs.readFileSync('husk-gate.json', 'utf8')); }
+          try { d = JSON.parse(fs.readFileSync(require('path').join(process.env.RUNNER_TEMP, 'husk-gate.json'), 'utf8')); }
           catch (e) { return; }
           const c = d.counts;
           const emoji = { pass: '✅', warn: '⚠️', fail: '❌' }[d.decision] || '❓';
