@@ -2,6 +2,7 @@
 
 Usage:
   python benchmarks/dataset_bench.py <out.jsonl> <label>=<dir-of-skill-dirs> [...]
+      (<label>=<dir>/** instead scans every folder under <dir> holding a SKILL.md)
   python benchmarks/dataset_bench.py --stb <SkillTrustBench dir> <out.jsonl>
   python benchmarks/dataset_bench.py --compare <old.jsonl> <new.jsonl>
 
@@ -39,6 +40,15 @@ def _jobs_from_dirs(specs):
     jobs = []
     for spec in specs:
         label, root = spec.split("=", 1)
+        if root.endswith("/**"):
+            # Every folder holding a SKILL.md, at any depth (dxta-skills keeps
+            # its skills in category folders), skipping hidden folders.
+            root = root[:-3]
+            for d, subdirs, files in os.walk(root):
+                subdirs[:] = sorted(s for s in subdirs if not s.startswith("."))
+                if "SKILL.md" in files:
+                    jobs.append((label, d))
+            continue
         for name in sorted(os.listdir(root)):
             p = os.path.join(root, name)
             if os.path.isdir(p):

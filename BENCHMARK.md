@@ -5,6 +5,76 @@ testing sessions - this section is the current, accurate headline,
 everything below is the full supporting record (methodology, every
 competitor comparison, every bug found and fixed along the way).
 
+# 2026-10 (1.4.1): remote-execution rule, and the head-to-head refreshed
+
+## The new rule, on every dataset
+1.4.1 catches remote code execution in forms other than a one-line `curl | bash`
+(see CHANGELOG.md). Same method as 1.4.0 below, 1.4.0 vs 1.4.1:
+
+| Dataset | Skills | Strict, 1.4.0 | Strict, 1.4.1 | Loose, 1.4.0 | Loose, 1.4.1 |
+|---|---:|---:|---:|---:|---:|
+| MalSkillBench malicious | 3,944 | 44.6% | **45.5%** | 67.5% | 67.5% |
+| SkillTrustBench malicious | 2,863 | 50.7% | 50.7% | 90.7% | 90.7% |
+| MalSkillBench benign (false alarms) | 4,000 | 2.8% | 2.8% | 4.7% | 4.6% |
+| SkillTrustBench normal (false alarms) | 1,643 | 1.7% | 1.7% | 6.3% | 6.3% |
+| Hand-checked legitimate (any finding) | 249 | 1.2% | **0.4%** | | |
+
+- **36 more MalSkillBench malware samples block** (1,760 to 1,795), mostly downloads to `/tmp` that are
+  then run, base64-encoded `bash -c "$(curl ...)"` droppers, `wget | bash`, and
+  `exec(urlopen(...).read())`. One sample stopped blocking: it had been caught only by
+  its official NodeSource install line, now on the trusted-installer list; its real
+  payload was never detected by either version.
+- **Benign: one skill fixed, one new.** The new one pipes its own GitHub install script
+  into `sudo bash`, exactly what the rule is for. 1.4.0 already flagged the same
+  line without `sudo`.
+- **The hand-checked set found three 1.4.0 false positives the dataset run missed**,
+  because `dataset_bench.py` only looked at top-level folders and skipped the 229
+  nested dxta skills (fixed: `label=dir/**`). All three were in anthropics/skills:
+  "an eval (prompt tuning...)" read as `eval(`, a sentence describing a supersede claim,
+  and a long comment in an HTML template. Two are fixed; the third, a `shell=True`
+  in webapp-testing, is unchanged since 1.3.5.
+- **No change on SkillTrustBench.** Its samples don't use these forms.
+
+## Head-to-head refresh, 549 of the 699 sample skills
+The ASB-derived half of the 2026-09 sample (150 malicious skills) is not available on
+the current benchmark machine, so this refresh covers the other 549: 150 MalSkillBench
+malicious, 249 hand-checked legitimate, 150 MalSkillBench benign. Tools with a release
+since 2026-09 were re-run at their new version (Husk 1.4.0 and 1.4.1, Cisco 2.2.2,
+agent-audit-kit 0.6.20, SecureAI-Scan 0.12.0); every other tool is re-scored from its
+2026-09 raw output on the same 549 skills. Scoring is unchanged. Raw output, the runner
+and the report script are in `benchmarks/competitors/raw/2026-10/`.
+
+| Scanner | Reading | Malware caught | Hand-checked legit passed | Research benign passed |
+|---|---|---|---|---|
+| **Husk** 1.4.1 | strict | 72.0% (108/150) | 99.6% (248/249) | 93.3% (140/150) |
+| SkillFortify 0.6.0 | strict | 70.0% (105/150) | 82.3% (205/249) | 32.0% (48/150) |
+| syedabbast/skill-scanner git HEAD | strict | 64.7% (97/150) | 86.7% (216/249) | 71.3% (107/150) |
+| agent-audit 0.20.0 | strict | 55.3% (83/150) | 92.8% (231/249) | 87.3% (131/150) |
+| Cisco AI Defense skill-scanner 2.2.2 | strict | 48.7% (73/150) | 96.4% (240/249) | 91.3% (137/150) |
+| clawhub-bridge 5.1.0 | strict | 47.3% (71/150) | 80.7% (201/249) | 70.7% (106/150) |
+| skillfrisk 0.3.0 | strict | 37.3% (56/150) | 91.6% (228/249) | 76.0% (114/150) |
+| skill-audit (npm) 0.1.1 | strict | 36.7% (55/150) | 91.2% (227/249) | 84.0% (126/150) |
+| skillguard 1.0.0 | strict | 36.7% (55/150) | 70.3% (175/249) | 73.3% (110/150) |
+| agentscan-cli 1.2.2 | strict | 31.3% (47/150) | 93.2% (232/249) | 82.7% (124/150) |
+| malwar 0.4.0 | strict | 28.7% (43/150) | 92.0% (229/249) | 86.0% (129/150) |
+| agent-audit-kit 0.6.20 | strict | 28.0% (42/150) | 93.2% (232/249) | 72.0% (108/150) |
+| SecureAI-Scan 0.12.0 | strict | 25.3% (38/150) | 99.6% (248/249) | 94.7% (142/150) |
+| OpenTrApp Skill Firewall 2.0.0 | strict | 20.3% (30/148), 2 no result | 96.0% (237/247), 2 no result | 86.6% (129/149), 1 no result |
+| skill-shielder git HEAD | strict | 20.0% (30/150) | 92.0% (229/249) | 76.0% (114/150) |
+| skill-security-scanner (Steffano198) git HEAD | strict | 0.0% (0/150) | 100.0% (249/249) | 100.0% (150/150) |
+
+- **Husk still catches the most malware at the strict reading**, and only SecureAI-Scan
+  matches its false-alarm rate, catching about a third as much.
+- **Cisco now has a full-sample row.** In 2026-09 it was too slow to run on more
+  than the shared subset; on this machine it averaged 7 s per skill, so 2.2.2 ran on
+  all 549. On the 150 subset skills both versions scored, 2.2.2 is within one
+  skill of 2.1.0 on every column.
+- **SecureAI-Scan 0.12.0 and agent-audit-kit 0.6.20 are within one skill of their
+  2026-09 versions** on every column.
+- The loose table and the shared 150-skill subset (where NVIDIA SkillSpector is scored)
+  are in `raw/2026-10/report.md`. Husk's row counts any finding, as in 2026-09, so it is
+  the same in both readings.
+
 # 2026-10 (1.4.0): security fixes, measured on three datasets
 
 1.4.0 closes evasions found in a security review (see CHANGELOG.md) and adds a new

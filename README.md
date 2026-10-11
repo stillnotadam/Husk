@@ -143,7 +143,7 @@ For development (editable install, includes the test suite and dev tools):
 git clone https://github.com/ctrl-adam/Husk.git
 cd Husk
 pip install -e ".[dev]"
-python3 -m pytest tests/ -v   # 400 passed, 10 xfailed
+python3 -m pytest tests/ -v   # 433 passed, 10 xfailed
 ```
 
 ## Usage

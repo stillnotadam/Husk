@@ -2,7 +2,7 @@
 #   # .pre-commit-config.yaml
 #   repos:
 #     - repo: https://github.com/ctrl-adam/Husk
-#       rev: v1.4.0
+#       rev: v1.4.1
 #       hooks:
 #         - id: husk-gate
 - id: husk-gate

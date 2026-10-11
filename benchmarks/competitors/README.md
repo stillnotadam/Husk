@@ -14,3 +14,12 @@ Everything used for the 2026-09 head-to-head in BENCHMARK.md.
 
 Paths inside the files point at the benchmark machine (`/home/claude/...`); the sample lists
 map to the MalSkillBench, ASB-derived and curated datasets described in BENCHMARK.md.
+
+## 2026-10 refresh
+
+`raw/2026-10/` holds the refresh described at the top of BENCHMARK.md: the 549 sample
+skills available on the newer benchmark machine (the ASB-derived half was not), run with
+Husk 1.4.0 (`husk`) and 1.4.1 (`huskdev`) and the competitors released since 2026-09.
+`runner_local.py` reads `sample_local.json` (original path, local path) and stores records
+under the original path, so `report_local.py` can join them with the 2026-09 raw files
+(set `HUSK_OLD_RAW` to an absolute path to `raw/`).

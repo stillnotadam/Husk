@@ -4,7 +4,7 @@ All notable changes to Husk are documented here. Format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.0.0/); versioning
 follows [Semantic Versioning](https://semver.org/).
 
-## [Unreleased]
+## [1.4.1] - 2026-10-11
 
 ### Security
 - **Remote code execution in forms other than `curl ... | bash` now blocks.** With an
