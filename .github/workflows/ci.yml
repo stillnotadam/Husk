@@ -21,4 +21,15 @@ jobs:
       - run: pip install -e ".[dev]"
       - run: ruff check src tests
       - run: mypy src/husk --ignore-missing-imports
-      - run: pytest -q
+      - name: pytest
+        shell: bash
+        run: |
+          set -o pipefail
+          pytest -q -rfE 2>&1 | tee pytest.log
+      - name: Annotate failing tests
+        if: failure()
+        shell: bash
+        run: |
+          grep -E '^(FAILED|ERROR) ' pytest.log | head -20 | while read -r line; do
+            echo "::error title=pytest::${line:0:400}"
+          done
