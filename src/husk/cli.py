@@ -24,7 +24,7 @@ from .attestation import (
 from .badge import badge_html, badge_markdown
 from .crossref import crossref_skill
 from .gate import evaluate as gate_evaluate
-from .gate import load_policy
+from .gate import load_policy, restrict_to_tightening
 from .js_taint_analysis import analyze_js_taint
 from .llm_review import (
     PACKAGE_SCANNABLE_EXTENSIONS,
@@ -116,11 +116,43 @@ def _consensus_review_package(package_path):
     return {"available": any_available, "verdict": overall_verdict, "per_file": per_file}
 
 
+def _suppress_path(args):
+    """The suppression file to apply: an explicit --suppress always; the
+    package's own .huskignore only with --trust-package-policy (a package
+    must not be able to silence its own findings)."""
+    if args.suppress:
+        return args.suppress
+    own = os.path.join(args.path, ".huskignore")
+    if getattr(args, "trust_package_policy", False):
+        return own
+    if os.path.isfile(own):
+        print("  Note: the package ships a .huskignore; it was NOT applied. Pass "
+              "--trust-package-policy if this is your own repository.", file=sys.stderr)
+    return None
+
+
+def _resolve_policy(args):
+    """(policy, error) for gate/attest: an explicit --policy file is
+    trusted; the package's own .huskpolicy only with --trust-package-policy,
+    otherwise only its stricter settings apply."""
+    if getattr(args, "policy", None):
+        return load_policy(args.path, policy_file=args.policy)
+    policy, error = load_policy(args.path)
+    if getattr(args, "trust_package_policy", False):
+        return policy, error
+    policy, dropped = restrict_to_tightening(policy)
+    if dropped:
+        print(f"  Note: the package's .huskpolicy tries to relax the gate ({', '.join(dropped)}); "
+              f"not applied. Pass --trust-package-policy if this is your own repository.",
+              file=sys.stderr)
+    return policy, error
+
+
 def cmd_package(args):
     findings = scan_package(args.path)
 
-    suppress_path = args.suppress or os.path.join(args.path, ".huskignore")
-    findings, suppressed_count = apply_suppressions(findings, suppress_path)
+    suppress_path = _suppress_path(args)
+    findings, suppressed_count = apply_suppressions(findings, suppress_path) if suppress_path else (findings, 0)
 
     verdict = "FLAGGED" if findings else "SAFE"
     exit_code = _print_result(verdict, findings, "package")
@@ -228,7 +260,9 @@ def cmd_aggregate(args):
     print(f"\nSummary: {summary['flagged_by']}/{summary['total_sources']} sources flag "
           f"this, agreement: {summary['agreement']}\n")
 
-    if summary["agreement"] in ("split", "majority_flagged"):
+    # Non-zero when any source flags the skill, or when Husk itself could
+    # not scan it: "unanimous" (every source flagged it) used to exit 0.
+    if summary["flagged_by"] > 0 or not result["opinions"].get("husk", {}).get("available"):
         return 1
     return 0
 
@@ -247,10 +281,10 @@ def cmd_gate(args):
         return 2
 
     findings = scan_package(args.path)
-    suppress_path = args.suppress or os.path.join(args.path, ".huskignore")
-    findings, suppressed_count = apply_suppressions(findings, suppress_path)
+    suppress_path = _suppress_path(args)
+    findings, suppressed_count = apply_suppressions(findings, suppress_path) if suppress_path else (findings, 0)
 
-    policy, policy_error = load_policy(args.path)
+    policy, policy_error = _resolve_policy(args)
     if args.block_on:
         policy["block_on"] = args.block_on
     result = gate_evaluate(findings, policy)
@@ -265,6 +299,8 @@ def cmd_gate(args):
             "warnings": result["warnings"],
             "info": result["info"],
             "suppressed": suppressed_count,
+            "ignored_by_policy": result["ignored_by_policy"],
+            "demoted_by_example_paths": result["demoted_by_example_paths"],
         }, indent=2))
         return 0 if result["decision"] != "fail" else 1
 
@@ -274,7 +310,10 @@ def cmd_gate(args):
     c = result["counts"]
     print(f"  {c['critical']} critical, {c['high']} high, {c['medium']} medium, "
           f"{c['low']} low, {c['info']} info"
-          + (f"  ({suppressed_count} suppressed)" if suppressed_count else ""))
+          + (f"  ({suppressed_count} suppressed)" if suppressed_count else "")
+          + (f"  ({result['ignored_by_policy']} ignored by policy)" if result["ignored_by_policy"] else "")
+          + (f"  ({result['demoted_by_example_paths']} demoted as examples)"
+             if result["demoted_by_example_paths"] else ""))
     print(f"  Policy: block at '{policy['block_on']}' and above"
           + (f"  [{policy_error}]" if policy_error else ""))
 
@@ -313,7 +352,7 @@ def cmd_attest(args):
         return 2
 
     findings = scan_package(args.path)
-    policy, _ = load_policy(args.path)
+    policy, _ = _resolve_policy(args)
     timestamp = None if args.no_timestamp else now_timestamp()
     statement = build_attestation(
         args.path, findings, policy=policy, skill_ref=args.name, timestamp=timestamp,
@@ -603,6 +642,18 @@ def cmd_model(args):
     return _print_result(result["verdict"], result["findings"], "model")
 
 
+TRUST_HELP = ("Apply the package's own .huskpolicy and .huskignore in full. Only for "
+              "your own repository: by default a scanned package can make the gate "
+              "stricter but never relax it, so a malicious skill can't silence itself.")
+POLICY_HELP = "Policy JSON file to apply (trusted). Overrides any .huskpolicy in the package."
+
+
+def _add_policy_args(parser, policy=True):
+    parser.add_argument("--trust-package-policy", action="store_true", help=TRUST_HELP)
+    if policy:
+        parser.add_argument("--policy", metavar="PATH", help=POLICY_HELP)
+
+
 def main():
     parser = argparse.ArgumentParser(
         prog="husk",
@@ -658,9 +709,9 @@ def main():
     p_package.add_argument(
         "--suppress", metavar="PATH",
         help="Path to a suppression file (one rule ID per line, '#' comments "
-             "allowed). Defaults to a '.huskignore' file inside the scanned "
-             "package directory, if one exists - same convention as "
-             ".gitignore. Run a scan once, read the findings, add the rule "
+             "allowed). The package's own '.huskignore' is used only with "
+             "--trust-package-policy, so a scanned package can't silence "
+             "itself. Run a scan once, read the findings, add the rule "
              "IDs you've reviewed and accepted to .huskignore, and future "
              "scans won't re-flag them.",
     )
@@ -692,6 +743,7 @@ def main():
              "single model's opinion. Real cost scaling, stated plainly: "
              "one call per file PER PROVIDER queried.",
     )
+    _add_policy_args(p_package, policy=False)
     p_package.set_defaults(func=cmd_package)
 
     p_gate = subparsers.add_parser(
@@ -708,14 +760,15 @@ def main():
     )
     p_gate.add_argument(
         "--suppress", metavar="PATH",
-        help="Suppression file (defaults to .huskignore in the package), "
-             "same convention as husk package.",
+        help="Suppression file (trusted). The package's own .huskignore is "
+             "only used with --trust-package-policy.",
     )
     p_gate.add_argument(
         "--json", action="store_true",
         help="Emit the full decision as JSON (for CI to parse) instead of "
              "the human-readable summary.",
     )
+    _add_policy_args(p_gate)
     p_gate.set_defaults(func=cmd_gate)
 
     p_attest = subparsers.add_parser(
@@ -732,6 +785,7 @@ def main():
     p_attest.add_argument("--sign", action="store_true",
                           help="Sign the statement with Sigstore keyless (needs the 'sigstore' extra)")
     p_attest.add_argument("--staging", action="store_true", help="Use Sigstore staging (testing only)")
+    _add_policy_args(p_attest)
     p_attest.set_defaults(func=cmd_attest)
 
     p_verify = subparsers.add_parser(

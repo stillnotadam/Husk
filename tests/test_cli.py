@@ -541,6 +541,9 @@ def test_cmd_package_suppression_message_shown_when_findings_suppressed():
             f.write(rule_id + "\n")
         args = argparse.Namespace(path=d, sandbox=False, virustotal=False, suppress=None,
                                    output=None, llm_review=False, llm_provider="anthropic",
-                                   llm_consensus=False)
+                                   llm_consensus=False, trust_package_policy=True)
         result = cli.cmd_package(args)
         assert result == 0  # the only finding was suppressed - package should be clean
+        # Without the trust flag the package's own .huskignore is not applied.
+        args.trust_package_policy = False
+        assert cli.cmd_package(args) == 1

@@ -56,7 +56,7 @@ _SEVERITY_RULES = [
         r"|writes to a system-level, root-required persistence"
         r"|sets the SUID/SGID bit"
         r"|Destructive filesystem command targeting the root"
-        r"|is actually a ZIP archive despite"
+        r"|is actually an? [\w -]{1,25}archive[^']{0,12} despite"
         r"|Loads raw compiled bytecode via marshal"
         r"|redirects a file descriptor to a socket"
         r"|reverse-shell pattern"
@@ -83,6 +83,8 @@ _SEVERITY_RULES = [
         r"|package\.json (?:preinstall|postinstall)"
         r"|shell command substitution reads a credential"
         r"|prose prompt-injection"
+        r"|compiled Python bytecode shipped inside the skill"
+        r"|password-protected archive"
         r"|JS/TS taint-tracked data flow", re.IGNORECASE)),
     # --- medium: runtime code-exec / shell primitives, common but risky ---
     ("medium", re.compile(
@@ -148,13 +150,14 @@ DEFAULT_POLICY = {
 }
 
 
-def load_policy(package_path):
-    """Read a .huskpolicy JSON file from the package root if present,
-    merged over the defaults. Never raises: a malformed policy falls back
-    to the default and is reported via the returned 'policy_error'."""
+def load_policy(package_path, policy_file=None):
+    """Read a policy JSON file - `policy_file` if given, else .huskpolicy in
+    the package root - merged over the defaults. Never raises: a malformed
+    policy falls back to the default and is reported via the returned
+    'policy_error'."""
     policy = dict(DEFAULT_POLICY)
     policy_error = None
-    path = os.path.join(package_path, ".huskpolicy")
+    path = policy_file or os.path.join(package_path, ".huskpolicy")
     if os.path.isfile(path):
         try:
             with open(path, encoding="utf-8") as fh:
@@ -177,6 +180,28 @@ def load_policy(package_path):
         except Exception as exc:  # noqa: BLE001 - reported, never fatal
             policy_error = f"{os.path.basename(path)} ignored ({exc}); using defaults"
     return policy, policy_error
+
+
+def restrict_to_tightening(policy):
+    """Keep only the parts of a policy that make the gate stricter.
+
+    A .huskpolicy or .huskignore inside the package being checked is written
+    by whoever wrote the package - including an attacker. Letting it relax
+    the gate meant a malicious skill could ship `{"ignore": ["'"]}` and pass
+    with every finding dropped. Untrusted policy may lower the thresholds
+    (block or warn on more), never raise them, and its ignore list and
+    example paths are not applied. Returns (policy, relaxations_dropped)."""
+    tightened = dict(DEFAULT_POLICY)
+    dropped = []
+    for key in ("block_on", "warn_on"):
+        if SEVERITY_ORDER.index(policy[key]) > SEVERITY_ORDER.index(DEFAULT_POLICY[key]):
+            tightened[key] = policy[key]
+        elif policy[key] != DEFAULT_POLICY[key]:
+            dropped.append(f"{key}={policy[key]}")
+    for key in ("ignore", "example_paths"):
+        if policy.get(key):
+            dropped.append(f"{key} ({len(policy[key])} entries)")
+    return tightened, dropped
 
 
 _FINDING_PATH_RE = re.compile(r"^'([^']+)'\s*:")
@@ -223,13 +248,16 @@ def evaluate(findings, policy=None):
 
     blocking, warnings, info = [], [], []
     counts = dict.fromkeys(SEVERITY_ORDER, 0)
+    ignored = demoted = 0
 
     for finding in findings:
         if any(ig and ig in finding for ig in ignore):
+            ignored += 1
             continue
         severity = classify_severity(finding)
         if severity != "info" and _finding_in_example_path(finding, example_paths):
             severity = "info"
+            demoted += 1
         counts[severity] += 1
         entry = {"finding": finding.replace(_SOFT_MARKER, "").strip(), "severity": severity}
         if _at_or_above(severity, block_on):
@@ -246,4 +274,7 @@ def evaluate(findings, policy=None):
         "warnings": warnings,
         "info": info,
         "counts": counts,
+        # Always reported, so a policy that hides findings is visible.
+        "ignored_by_policy": ignored,
+        "demoted_by_example_paths": demoted,
     }

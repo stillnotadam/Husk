@@ -43,6 +43,15 @@ husk gate ./my-skill --json     # machine-readable, for your own pipeline
 
 `example_paths` is for security tools whose docs legitimately quote attack strings - findings in those declared files are reported, not blocking. It's author-declared on purpose: Husk never silently trusts a package just because it *looks* like a security tool (real malware is disguised that way).
 
+**A package can't relax its own gate.** Whoever wrote a skill also wrote its `.huskpolicy` and `.huskignore`, so by default those files can only make the gate *stricter*. Their ignore lists, example paths and looser thresholds apply only when you say the package is yours:
+
+```bash
+husk gate ./my-skill --trust-package-policy     # your own repo, your own policy
+husk gate ./downloaded-skill --policy team.json # a policy file you control
+```
+
+The gate always reports how many findings a policy ignored or demoted. In the GitHub Action, set `trust-package-policy: "true"`, and remember that a pull request from a fork can edit those files.
+
 Also runs as a [pre-commit hook](.pre-commit-hooks.yaml).
 
 ## Reproducible attestation: proof an AI review can't give
@@ -232,8 +241,10 @@ Security tab, not just a terminal log.
 At Husk's real, honestly-measured false-positive rate (see
 BENCHMARK.md, this isn't hidden), running the same scan repeatedly in
 CI without a way to say "reviewed, this one's fine" gets a tool
-uninstalled fast. Drop a `.huskignore` file in the scanned package
-directory, same convention as `.gitignore`, one rule ID per line:
+uninstalled fast. Drop a `.huskignore` file in your own package
+directory, same convention as `.gitignore`, one rule ID per line, and
+run with `--trust-package-policy` (or pass any suppression file with
+`--suppress PATH`). A package you didn't write can't silence itself:
 
 ```
 # .huskignore

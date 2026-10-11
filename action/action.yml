@@ -20,9 +20,19 @@ inputs:
       Fail the build on this severity and above: critical, high, medium, or
       low. Default 'high' blocks clear threats (credential harvesting, C2
       IPs, curl|bash from untrusted hosts) while letting ordinary code
-      through. A package's own .huskpolicy file overrides this.
+      through. A package's own .huskpolicy can only make this stricter
+      unless trust-package-policy is on.
     required: false
     default: "high"
+  trust-package-policy:
+    description: >
+      Apply the scanned package's own .huskpolicy and .huskignore in full
+      (ignore lists, example paths, looser thresholds). Off by default so a
+      malicious skill can't silence its own findings. Turn it on only when the
+      scanned path is your own repository's code, and keep in mind that a pull
+      request from a fork can edit these files.
+    required: false
+    default: "false"
   comment-on-pr:
     description: "Post the gate result as a PR comment (needs pull-requests: write)."
     required: false
@@ -75,9 +85,12 @@ runs:
       env:
         HUSK_PATH: ${{ inputs.path }}
         HUSK_BLOCK_ON: ${{ inputs.block-on }}
+        HUSK_TRUST: ${{ inputs.trust-package-policy }}
       run: |
         set +e
-        husk gate "$HUSK_PATH" --block-on "$HUSK_BLOCK_ON" --json > "$RUNNER_TEMP/husk-gate.json"
+        TRUST=()
+        if [ "$HUSK_TRUST" = "true" ]; then TRUST=(--trust-package-policy); fi
+        husk gate "$HUSK_PATH" --block-on "$HUSK_BLOCK_ON" "${TRUST[@]}" --json > "$RUNNER_TEMP/husk-gate.json"
         CODE=$?
         python3 - <<'PY' >> "$GITHUB_OUTPUT"
         import json, os
@@ -87,7 +100,7 @@ runs:
         print(f"summary={c['critical']} critical, {c['high']} high, {c['medium']} medium, {c['low']} low, {c['info']} info")
         PY
         # Human-readable run log
-        husk gate "$HUSK_PATH" --block-on "$HUSK_BLOCK_ON"
+        husk gate "$HUSK_PATH" --block-on "$HUSK_BLOCK_ON" "${TRUST[@]}"
         exit $CODE
 
     - name: Husk attestation
