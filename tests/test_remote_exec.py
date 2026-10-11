@@ -21,7 +21,7 @@ def _decision(tmp_path, skill, files=None):
     for rel, body in (files or {}).items():
         p = tmp_path / rel
         p.parent.mkdir(parents=True, exist_ok=True)
-        p.write_text(body, encoding="utf-8", newline="\n")
+        p.write_bytes(body.encode("utf-8"))  # LF endings; write_text(newline=) needs 3.10
     return evaluate(scan_package(str(tmp_path)))["decision"]
 
 
