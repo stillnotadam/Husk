@@ -65,8 +65,10 @@ A security review found ways to make `husk gate` pass a package that ships a pla
 - The dynamic sandbox killed every Go binary and could break `fork` on a busy machine.
   The process limit was a flat 10 for the whole user; it is now the user's current
   count plus 64. Forked children are killed when a run ends instead of outliving it.
-- CI failed on Linux runners where Go is installed, and one test left the whole test
-  run capped at 5 CPU-seconds.
+- The sandbox couldn't find `node` or `ruby` installed outside `/usr/bin` (for example
+  `/usr/local/bin`) unless bubblewrap was active.
+- CI failed on Linux runners where Go or Node is installed, and one test left the whole
+  test run capped at 5 CPU-seconds. Failing test names now show as CI annotations.
 - ClawHub's verdict lookup falls back to the public `/verify` endpoint. ClawHub's docs
   now say the verdicts endpoint needs a token; set `CLAWHUB_TOKEN` if you have one.
 
