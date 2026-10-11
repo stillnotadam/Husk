@@ -69,6 +69,7 @@ _SEVERITY_RULES = [
     # --- high: strong indicators, but context can occasionally be legit ---
     ("high", re.compile(
         r"Pipes a downloaded script directly into a shell"
+        r"|remote code execution - "
         r"|downloads a script over unencrypted HTTP"
         r"|targets a bare IP address"
         r"|points at a tunneling-service domain"

@@ -4,6 +4,22 @@ All notable changes to Husk are documented here. Format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.0.0/); versioning
 follows [Semantic Versioning](https://semver.org/).
 
+## [Unreleased]
+
+### Security
+- **Remote code execution in forms other than `curl ... | bash` now blocks.** With an
+  ordinary domain instead of a bare IP, each of these passed the gate: `wget | sh`,
+  `curl | sudo bash`, `curl | python3 -`, a pipe split across lines with `\`,
+  `bash <(curl ...)`, `source <(wget ...)`, `sh -c "$(curl ...)"`, `eval "$(curl ...)"`,
+  `bash <<< "$(wget ...)"`, downloading to `/tmp` or a hidden file and running it,
+  Python `exec()` of a `urlopen`/`requests` read (also through a variable and
+  `compile()`), JS `fetch(...)...eval()`, prose telling the reader to pipe a URL into
+  bash, and any of those base64-encoded in the text. Fetches from the trusted installer
+  hosts stay info-only, as for `curl | bash`.
+- A paste-site link next to "run" or "execute" now counts as an instruction to run it,
+  and termbin, sprunge, ix.io, dpaste, paste.rs, pastes.dev and controlc were added to
+  the paste sites.
+
 ## [1.4.0] - 2026-10-11
 
 A security review found ways to make `husk gate` pass a package that ships a plain

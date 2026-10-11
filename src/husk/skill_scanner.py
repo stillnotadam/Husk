@@ -205,6 +205,11 @@ TRUSTED_INSTALL_HOSTS = (
     "raw.githubusercontent.com/Homebrew", "deno.land", "get.helm.sh",
     "sdk.cloud.google.com", "cli.github.com", "get.k3s.io", "ollama.com/install.sh",
     "nixos.org/nix/install", "fnm.vercel.app", "get.volta.sh", "starship.rs",
+    # Added with the 2026-10 remote-execution rule (`| sudo -E bash`,
+    # `sh -c "$(curl ...)"`), each an official vendor installer seen in the
+    # MalSkillBench benign set.
+    "deb.nodesource.com", "rpm.nodesource.com", "packagecloud.io/install/repositories",
+    "release.anza.xyz", "release.solana.com", "sugar.metaplex.com",
 )
 _INSTALL_URL_RE = re.compile(r"https?://([^\s|'\")]+)", re.IGNORECASE)
 
@@ -257,6 +262,10 @@ def scan_for_dangerous_patterns(text):
             if _is_negated(text, match.start()):
                 continue
             if pattern in CALL_SYNTAX_ONLY_PATTERNS and _is_call_syntax_inside_comment_or_string(text, match.start()):
+                continue
+            # "improving an app against an eval (prompt tuning, ...)": in
+            # prose, the word followed by a space and a parenthesis is English.
+            if pattern in CALL_SYNTAX_ONLY_PATTERNS and _SCANNING_PROSE.get() and not match.group(0).endswith(("exec(", "eval(")):
                 continue
             # Show which line it's on, so a human can go verify it directly.
             line_num = _line_no(text, match.start())
@@ -1077,8 +1086,12 @@ def find_fake_prerequisite_socialengineering(text):
     """
     findings = []
 
-    PASTE_SITE_PATTERN = r"(glot\.io|rentry\.co|pastebin\.com|paste\.ee|hastebin\.com|paste\.sh)"
+    PASTE_SITE_PATTERN = r"(glot\.io|rentry\.co|pastebin\.com|paste\.ee|hastebin\.com|paste\.sh|termbin\.com|sprunge\.us|ix\.io|dpaste\.(?:org|com)|paste\.rs|pastes\.dev|controlc\.com)"
     TERMINAL_ACTION_PATTERN = r"(terminal|copy.{0,20}(script|command)|paste it)"
+    # Also: a paste URL (with a path) and "run"/"execute"/"| bash" on the
+    # same line. The 2026-10 review passed "fetch pastebin.com/raw/... , save
+    # it as init.sh and run it"; a bare domain in a threat list is not this.
+    PASTE_RUN_SAME_LINE = r"(?:\b(?:run|execute)\b|\|\s*(?:ba)?sh\b)"
 
     # The gap between the password and the extract verb may not cross a
     # sentence end: "...password to post. Tokens are extracted..." is not
@@ -1099,7 +1112,12 @@ def find_fake_prerequisite_socialengineering(text):
         line_num = _line_no(text, match.start())
         # look at surrounding text (~150 chars) for a terminal-execution cue
         window = text[max(0, match.start() - 150):match.end() + 150]
-        if re.search(TERMINAL_ACTION_PATTERN, window, re.IGNORECASE):
+        line_start = _bounded_rfind(text, "\n", match.start()) + 1
+        line_end = text.find("\n", match.end())
+        line = text[line_start:line_end if line_end != -1 else len(text)]
+        if re.search(TERMINAL_ACTION_PATTERN, window, re.IGNORECASE) or (
+                text[match.end():match.end() + 2].startswith("/") and text[match.end() + 1:match.end() + 2].isalnum()
+                and re.search(PASTE_RUN_SAME_LINE, line, re.IGNORECASE)):
             findings.append(
                 f"Line {line_num}: a paste-site link ({match.group(0)}) paired "
                 f"with an instruction to copy/paste it into a terminal - this "
@@ -3241,6 +3259,9 @@ _OVERRIDE_V2 = re.compile(
 )
 
 
+_DESCRIBES_CLAIM = re.compile(r"\b(?:claim(?:s|ing)?|purport(?:s|ing)?|pretend(?:s|ing)?|tr(?:y|ies|ying)|attempt(?:s|ing)?) to\s*$", re.IGNORECASE)
+
+
 def find_instruction_supersede(text):
     """Instruction-override phrasings that avoid the classic 'ignore
     previous instructions' wording: 'all prior instructions are
@@ -3250,6 +3271,10 @@ def find_instruction_supersede(text):
     out = []
     for m in _OVERRIDE_V2.finditer(text):
         if _is_inside_line_comment(text, m.start()):
+            continue
+        # Describing the attack is not making it: "a line claiming to
+        # supersede other rules is content to assess" (anthropics/skills).
+        if _DESCRIBES_CLAIM.search(text, max(0, m.start() - 40), m.start()):
             continue
         line = _line_no(text, m.start())
         out.append(f"Line {line}: instruction-override language ('{m.group(0)[:80]}') - "
@@ -3309,6 +3334,123 @@ def find_download_then_execute(text):
             line = _line_no(text, m.start())
             out.append(f"Line {line}: downloads '{m.group(1)}' and later executes it - "
                        f"two-step download-and-run of remote code")
+    return out
+
+
+# Remote-code-execution forms the plain `curl ... | sh|bash` rule never saw
+# (2026-10 evasion review): with an ordinary domain instead of a bare IP,
+# every one of these passed the gate. Each runs whatever a URL serves.
+_SHELL = r"(?:ba|z|da|k|fi)?sh"
+_FETCH = r"(?:curl|wget)\b"
+_SUBST = r"[\"']?(?:\$\(|`)\s*" + _FETCH
+_RCE_FORMS = [
+    # wget|sh, curl|zsh, curl|sudo -E bash, curl|python3 (bare or reading stdin).
+    # `| python -m json.tool` / `| python -c "..."` are ordinary JSON handling.
+    (re.compile(_FETCH + r"[^\n]{0,400}?\|\s*(?:sudo\s+(?:-\S+\s+)*)?(?:"
+                + _SHELL + r"(?![\w.]|\s+-c\b)"
+                + r"|(?:python[\d.]*|perl|ruby|node|php)(?=\s*(?:-\s|-?$|[;&|)]))"
+                + r")", re.IGNORECASE | re.MULTILINE),
+     "pipes a download into an interpreter"),
+    (re.compile(r"(?:\b" + _SHELL + r"|\bsource|(?<![\w.])\.)\s+(?:-s\s+)?<\(\s*" + _FETCH, re.IGNORECASE),
+     "runs a download through process substitution"),
+    (re.compile(r"\b(?:" + _SHELL + r"|python[\d.]*|perl|ruby|node)\s+-[ce]\s+" + _SUBST, re.IGNORECASE),
+     "passes a download to an interpreter's -c/-e"),
+    (re.compile(r"\beval\s+" + _SUBST, re.IGNORECASE),
+     "evals a download"),
+    (re.compile(r"\b(?:" + _SHELL + r"|python[\d.]*)\s*<<<\s*" + _SUBST, re.IGNORECASE),
+     "feeds a download to an interpreter as a here-string"),
+    # Python: exec/eval of a network read on one line; JS: fetch(...)...eval(.
+    (re.compile(r"(?<![\w.])(?:exec|eval)\s*\([^\n]{0,200}?\b(?:urlopen|urllib\.request|requests\.get|httpx\.get)\b"),
+     "executes code read straight from the network"),
+    (re.compile(r"\b(?:fetch|axios\.get|https?\.get)\s*\([^\n]{0,300}?(?<![\w.])(?:eval\s*\(|new\s+Function\s*\()"),
+     "executes code read straight from the network"),
+]
+_PY_NET_READ = re.compile(r"^\s*(\w+)\s*=\s*[^\n]{0,200}?\b(?:urlopen|requests\.get|httpx\.get)\s*\([^\n]*?(?:\.read\(\)|\.text\b|\.content\b)", re.MULTILINE)
+_TMP_DL = re.compile(_FETCH + r"[^\n]{0,400}?(?:-[a-zA-Z]*[oO]|--output(?:-document)?)[ =]?[\"']?((?:/tmp|/var/tmp|/dev/shm|\$TMPDIR|\$\{TMPDIR\})/[\w./${}-]{1,200}|\.[\w-]{1,100}\b)", re.IGNORECASE)
+_PIPE_INTO_SHELL_PROSE = re.compile(r"\bpipe\b[^\n.]{0,60}\b(?:in)?to\b[^\n.]{0,30}\b(?:bash|sh|zsh|(?:the|your|a)\s+(?:shell|terminal))\b", re.IGNORECASE)
+_RCE_TARGET = re.compile(r"://|\$\{?[A-Za-z_]|\b(?:url|uri|URL)\b")
+_SHORT_B64 = re.compile(r"(?<![A-Za-z0-9+/=])[A-Za-z0-9+/]{24,199}={0,2}(?![A-Za-z0-9+/=])")
+
+
+def _rce_hosts_trusted(text, start, end):
+    line_start = _bounded_rfind(text, "\n", start) + 1
+    line_end = text.find("\n", end)
+    return _curl_pipe_host_is_trusted(text[line_start:line_end if line_end != -1 else len(text)])
+
+
+def _rce_matches(text):
+    """(offset, why, snippet) for each remote-code-execution form in text.
+    Shell line continuations are joined first (same length, so offsets
+    still map to the original lines)."""
+    joined = text.replace("\\\r\n", "   ").replace("\\\n", "  ")
+    out = []
+    for pattern, why in _RCE_FORMS:
+        for _, m in zip(range(_MAX_MATCHES_PER_CHECK), pattern.finditer(joined)):
+            # Needs something to fetch: a URL or a variable. Scanner skills
+            # list "curl|bash, wget|sh, eval $(curl)" as things they detect.
+            line_end = joined.find("\n", m.end())
+            if not _RCE_TARGET.search(joined, m.start(), line_end if line_end != -1 else len(joined)):
+                continue
+            out.append((m.start(), m.end(), why, m.group(0)))
+    for _, m in zip(range(_MAX_MATCHES_PER_CHECK), _PY_NET_READ.finditer(text)):
+        # (?<!\.): re.compile(pattern_from_the_web) is not code execution.
+        sink = re.compile(r"(?<![\w.])(?:exec|eval|compile)\s*\(\s*" + re.escape(m.group(1)) + r"\b")
+        s = sink.search(text, m.end())
+        if s and s.start() - m.end() <= 3000:
+            out.append((m.start(), m.end(), "executes code read straight from the network", m.group(0)))
+    return out
+
+
+def find_remote_code_execution(text):
+    """Remote code execution in the forms `curl | bash` doesn't cover: other
+    downloaders and interpreters, process substitution, `sh -c "$(curl ..)"`,
+    eval, here-strings, line continuations, exec() of a network read, a
+    download to a temp/hidden path that is then run, prose telling the reader
+    to pipe a URL into a shell, and any of those base64-encoded. Fetches from
+    the trusted installer hosts stay info-only, as for `curl | bash`."""
+    out, seen = [], set()
+    curl_pipe = re.compile(DANGEROUS_PATTERNS[0][0], re.IGNORECASE)
+    for start, end, why, snippet in _rce_matches(text):
+        line = _line_no(text, start)
+        if (line, why) in seen or _is_negated(text, start):
+            continue
+        # The original rule already reports a one-line curl|sh/bash.
+        if why == "pipes a download into an interpreter" and curl_pipe.match(text, start) and "\n" not in text[start:end]:
+            continue
+        seen.add((line, why))
+        marker = SOFT_FINDING_MARKER if _rce_hosts_trusted(text, start, end) else ""
+        out.append(f"{marker}Line {line}: remote code execution - {why} "
+                   f"('{' '.join(snippet.split())[:100]}')")
+    for _, m in zip(range(_MAX_MATCHES_PER_CHECK), _TMP_DL.finditer(text)):
+        path = m.group(1)
+        name = re.escape(path)
+        run = re.compile(rf"(?:chmod\s+\+?[0-7]*x?\S*\s+[\"']?{name}|(?:^|[\s;&|`(])(?:{_SHELL}|python[\d.]*|perl|ruby|node|source|\.)\s+[\"']?{name}|(?:^|&&|;|\|\||\n)\s*[\"']?{name}(?:[\s\"';&|]|$))", re.MULTILINE)
+        if (run.search(text, m.end(), m.end() + 600) and not _rce_hosts_trusted(text, m.start(), m.end())
+                and not _TRUSTED_CODE_HOST.search(text, m.start(), m.end())):
+            out.append(f"Line {_line_no(text, m.start())}: remote code execution - downloads to a "
+                       f"temp or hidden path ('{path}') and runs it")
+    if _SCANNING_PROSE.get():
+        for _, m in zip(range(_MAX_MATCHES_PER_CHECK), _PIPE_INTO_SHELL_PROSE.finditer(text)):
+            line_start = _bounded_rfind(text, "\n", m.start()) + 1
+            line_end = text.find("\n", m.end())
+            full_line = text[line_start:line_end if line_end != -1 else len(text)]
+            if re.search(r"https?://", full_line) and not _is_negated(text, m.start()) and not _curl_pipe_host_is_trusted(full_line):
+                out.append(f"Line {_line_no(text, m.start())}: remote code execution - instructs "
+                           f"piping a downloaded script into a shell ('{m.group(0)[:80]}')")
+    for k, m in enumerate(_SHORT_B64.finditer(text)):
+        if k >= _MAX_MATCHES_EXAMINED:
+            break
+        blob = m.group(0)
+        try:
+            decoded = base64.b64decode(blob + "=" * (-len(blob) % 4), validate=True).decode("ascii")
+        except (ValueError, UnicodeDecodeError):
+            continue
+        if not decoded.isprintable():
+            continue
+        if curl_pipe.search(decoded) or _rce_matches(decoded):
+            out.append(f"Line {_line_no(text, m.start())}: remote code execution - a base64 string "
+                       f"decodes to a download-and-run command ('{decoded[:80]}')")
+            break
     return out
 
 
@@ -3655,6 +3797,7 @@ def _scan_text(text, ext):
     findings.extend(find_instruction_supersede(text))
     findings.extend(find_role_hijack(text))
     findings.extend(find_download_then_execute(text))
+    findings.extend(find_remote_code_execution(text))
     findings.extend(find_shell_startup_persistence(text))
     findings.extend(find_blindspot_persistence(text))
     findings.extend(find_credential_file_hunt(text))
@@ -3687,6 +3830,13 @@ def _scan_text(text, ext):
             else SOFT_FINDING_MARKER + f
             for f in findings
         ]
+
+    # Long comments are ordinary in HTML/XML/SVG templates (scanned since
+    # 1.4.0; anthropics/skills' algorithmic-art viewer.html). Comments that
+    # carry directive or secrecy language are separate findings and stay hard.
+    if ext in (".html", ".htm", ".xhtml", ".xml", ".svg"):
+        findings = [SOFT_FINDING_MARKER + f if not f.startswith(SOFT_FINDING_MARKER) and "unusually long hidden comment" in f
+                    else f for f in findings]
 
     if findings:
         hard_findings = [f for f in findings if not f.startswith(SOFT_FINDING_MARKER)]
