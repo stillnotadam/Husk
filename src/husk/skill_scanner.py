@@ -1080,7 +1080,11 @@ def find_fake_prerequisite_socialengineering(text):
     PASTE_SITE_PATTERN = r"(glot\.io|rentry\.co|pastebin\.com|paste\.ee|hastebin\.com|paste\.sh)"
     TERMINAL_ACTION_PATTERN = r"(terminal|copy.{0,20}(script|command)|paste it)"
 
-    PASSWORD_ARCHIVE_PATTERN = r"((?:password|pass\s*:)[:\s]+[`'\"]?\w+[`'\"]?).{0,30}(extract|unzip)|((extract|unzip).{0,30}(?:password|pass\s*:)[:\s]+[`'\"]?\w+)"  # noqa: S105 - this is a detection PATTERN for password-protected-archive attacks, not an actual credential
+    # The gap between the password and the extract verb may not cross a
+    # sentence end: "...password to post. Tokens are extracted..." is not
+    # an archive instruction (the one benign false positive this rule had
+    # on the 2026-10 benchmark run).
+    PASSWORD_ARCHIVE_PATTERN = r"((?:password|pass\s*:)[:\s]+[`'\"]?\w+[`'\"]?)(?:(?!\.\s)[^\n]){0,30}(extract|unzip)|((extract|unzip)(?:(?!\.\s)[^\n]){0,30}(?:password|pass\s*:)[:\s]+[`'\"]?\w+)"  # noqa: S105 - this is a detection PATTERN for password-protected-archive attacks, not an actual credential
 
     REQUIRE_FRAMING_PATTERN = r"(requires? (?:the )?[\w\-]+ (?:utility|agent|cli|tool) (?:to function|for [\w\s]{1,30}(?:operations?|purposes?))|without [\w\-]+ installed[^.]{0,40}(?:will not work|won.t work|will not function))"
     # Broadened after real-world testing: an earlier version only

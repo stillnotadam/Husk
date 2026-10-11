@@ -4,6 +4,78 @@ All notable changes to Husk are documented here. Format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.0.0/); versioning
 follows [Semantic Versioning](https://semver.org/).
 
+## [1.4.0] - 2026-10-11
+
+A security review found ways to make `husk gate` pass a package that ships a plain
+`curl | bash` payload. All of them are closed, and each has a regression test.
+
+### Changed
+- **A package can no longer relax its own gate.** A `.huskpolicy` or `.huskignore`
+  inside the package being checked can make the gate stricter, but its ignore list,
+  example paths and looser thresholds are only applied with `--trust-package-policy`
+  (for your own repository) or when passed explicitly with `--policy` / `--suppress`.
+  The gate always reports how many findings a policy ignored or demoted. The GitHub
+  Action has a matching `trust-package-policy` input, off by default.
+- Instructions to extract an archive with a given password (the fake-prerequisite
+  dropper) now block at the default `high` threshold instead of warning.
+  On the benchmark this catches 5.9 points more MalSkillBench malware and 3.7 points
+  more SkillTrustBench malware, with no new blocks on benign skills.
+- `husk aggregate` exits non-zero whenever any source flags the skill or Husk could
+  not scan it. A unanimous or single-source flag used to exit 0.
+- Attestations use manifest v2 (see Security). Older attestations still verify, with
+  a warning to re-attest.
+
+### Security
+- Files Husk never looked at are now scanned:
+  - files with no extension, Makefiles, `.mjs`/`.cjs`, shell variants, Perl, PHP,
+    Lua, PowerShell modules, VBScript, HTML and others;
+  - files with an unknown extension when their content is text;
+  - scripts whose language comes from their shebang line.
+- UTF-16 and UTF-32 files are decoded instead of read as noise.
+- Archives and other bundled files are now inspected:
+  - `.tar`, `.tar.gz` and single `.gz` files are unpacked with the same limits as
+    zip, and a plain tar archive is recognised under any name;
+  - pickles bundled in a package go through the pickle scanner;
+  - 7z and rar files are reported as not inspected;
+  - shipped `.pyc` files and `__pycache__/` folders block. This is the PyCache Trap
+    technique (arXiv:2610.10612), where bytecode runs different code from the source
+    a reviewer reads.
+- Encrypted, unsupported or corrupt archives, and any file that crashes the scanner,
+  are reported as findings and the scan continues. Before, they aborted the scan,
+  and `husk aggregate` treated that as "no opinion".
+- PDFs over the size or page cap, or encrypted PDFs, are reported as not fully
+  inspected.
+- `curl | bash` detection can no longer be dodged:
+  - a negating word ("without", "never") in an unrelated code comment no longer
+    hides the command;
+  - every URL in the command must be a trusted installer, not just the first one
+    on the line;
+  - 500 trusted lines can no longer fill a rule's hit cap.
+- Attestations, the scan cache, `husk watch` and `husk crossref` now hash every file
+  in a skill. Before, they hashed only text and code files, so swapping a bundled
+  archive, PDF or extensionless script went unnoticed. The manifest is JSON-encoded,
+  so a filename containing a newline can't imitate another file list.
+- On Windows, a skill fetched from GitHub could write files outside its temp folder
+  through backslash or drive-letter paths.
+- The GitHub Action passes its inputs to shell steps through environment variables
+  instead of pasting them into the script, and installs Husk from its own checkout, so
+  pinning the action pins the scanner.
+
+### Fixed
+- The dynamic sandbox killed every Go binary and could break `fork` on a busy machine.
+  The process limit was a flat 10 for the whole user; it is now the user's current
+  count plus 64. Forked children are killed when a run ends instead of outliving it.
+- CI failed on Linux runners where Go is installed, and one test left the whole test
+  run capped at 5 CPU-seconds.
+- ClawHub's verdict lookup falls back to the public `/verify` endpoint. ClawHub's docs
+  now say the verdicts endpoint needs a token; set `CLAWHUB_TOKEN` if you have one.
+
+### Added
+- `benchmarks/dataset_bench.py`: reproducible strict and loose scoring on local
+  datasets (MalSkillBench, SkillTrustBench, legitimate skill sets), plus a compare
+  mode that lists every skill whose outcome changed.
+- CI on Python 3.14. Actions moved off the deprecated Node 20 runtime.
+
 ## [1.3.5] - 2026-09-29
 
 ### Security

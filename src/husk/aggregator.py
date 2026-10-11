@@ -143,6 +143,11 @@ def _http(method, url, body=None):
     headers = {"User-Agent": _USER_AGENT, "Accept": "application/json, */*"}
     if data is not None:
         headers["Content-Type"] = "application/json"
+    # ClawHub documents its verdicts endpoint as token-only. Send a token if
+    # the user configured one - and only ever to ClawHub itself.
+    token = os.environ.get("CLAWHUB_TOKEN")
+    if token and url.startswith(CLAWHUB_API.rstrip("/") + "/"):
+        headers["Authorization"] = f"Bearer {token}"
     req = urllib.request.Request(url, data=data, headers=headers, method=method)  # noqa: S310 - fixed https base URL
     with urllib.request.urlopen(req, timeout=_HTTP_TIMEOUT_SECONDS) as resp:  # noqa: S310
         payload = resp.read(_MAX_ARCHIVE_BYTES + 1)
@@ -549,10 +554,13 @@ def _fetch_clawhub_native_audit(skill_ref):
     """ClawHub's own published security verdict for the latest version.
 
     Primary: POST /api/v1/skills/-/security-verdicts (compact verdicts).
-    Fallback: the `moderation.verdict` field of GET /api/v1/skills/{slug},
-    whose real shape was confirmed from a live curl output posted in
-    openclaw/openclaw issue #92077 (June 2026). The fallback means one
-    endpoint changing or failing does not blank out ClawHub's verdict."""
+    Fallbacks, in order: the public /verify endpoint (needs the owner, which
+    the detail call supplies), then the `moderation.verdict` field of GET
+    /api/v1/skills/{slug}, whose real shape was confirmed from a live curl
+    output posted in openclaw/openclaw issue #92077 (June 2026). ClawHub's
+    docs now say the verdicts endpoint requires a token (set CLAWHUB_TOKEN)
+    and that `moderation` only appears on flagged skills, so /verify is what
+    keeps clean verdicts available if that requirement is enforced."""
     owner, slug = parse_clawhub_ref(skill_ref)
     if not slug:
         return {"available": False, "error": "no skill name given"}
@@ -598,7 +606,15 @@ def _fetch_clawhub_native_audit(skill_ref):
     else:
         primary_error = "skill has no public version on ClawHub"
 
-    if moderation_verdict in ("clean", "suspicious", "malicious"):
+    # A moderation flag wins over a clean /verify answer: the flag only
+    # appears on skills ClawHub has actually flagged.
+    if moderation_verdict in ("suspicious", "malicious"):
+        return _result(moderation_verdict, "moderation")
+    if owner:
+        via_verify = _verdict_via_verify(owner, slug)
+        if via_verify.get("available"):
+            return via_verify
+    if moderation_verdict == "clean":
         return _result(moderation_verdict, "moderation")
     return {"available": False, "error": primary_error}
 

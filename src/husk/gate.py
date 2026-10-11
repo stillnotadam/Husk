@@ -84,6 +84,10 @@ _SEVERITY_RULES = [
         r"|shell command substitution reads a credential"
         r"|prose prompt-injection"
         r"|compiled Python bytecode shipped inside the skill"
+        # Both a bundled encrypted archive and instructions to extract one
+        # with a given password (the fake-prerequisite dropper). Raised from
+        # medium on the 2026-10 benchmark: +5.9 pts strict recall on
+        # MalSkillBench, +3.7 on SkillTrustBench, no new benign blocks.
         r"|password-protected archive"
         r"|JS/TS taint-tracked data flow", re.IGNORECASE)),
     # --- medium: runtime code-exec / shell primitives, common but risky ---

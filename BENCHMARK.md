@@ -5,6 +5,45 @@ testing sessions - this section is the current, accurate headline,
 everything below is the full supporting record (methodology, every
 competitor comparison, every bug found and fixed along the way).
 
+# 2026-10 (1.4.0): security fixes, measured on three datasets
+
+1.4.0 closes evasions found in a security review (see CHANGELOG.md) and adds a new
+dataset, [SkillTrustBench](https://huggingface.co/datasets/cuhk-zhuque/SkillTrustBench)
+(Tencent Zhuque Lab and CUHK-Shenzhen, 5,520 cases, the benchmark ClawHub's own scanner
+harness recommends). Every number below was produced with
+`benchmarks/dataset_bench.py`, with the default gate policy and no LLM, comparing 1.3.5
+and 1.4.0 on the same files.
+
+**Strict** means the default gate fails the skill (a high or critical finding). **Loose**
+means any non-informational finding. The loose figure is what earlier sections of this
+file call "recall".
+
+| Dataset | Skills | Strict, 1.3.5 | Strict, 1.4.0 | Loose, 1.3.5 | Loose, 1.4.0 |
+|---|---:|---:|---:|---:|---:|
+| MalSkillBench malicious | 3,944 | 38.7% | **44.6%** | 67.3% | **67.5%** |
+| SkillTrustBench malicious | 2,863 | 47.0% | **50.7%** | 90.4% | **90.7%** |
+| SkillTrustBench suspicious (vulnerable, not malicious) | 1,014 | 2.2% | 2.2% | 38.6% | 38.6% |
+| MalSkillBench benign (false alarms) | 4,000 | 2.8% | 2.8% | 4.6% | 4.7% |
+| SkillTrustBench normal (false alarms) | 1,643 | 1.7% | 1.7% | 6.3% | 6.3% |
+| Legitimate skills, anthropics/skills + dxta (false alarms) | 75 | 1.3% | 1.3% | 2.7% | 4.0% |
+
+- **No benign or legitimate skill changed its strict outcome, and no malicious skill was
+  lost.** 338 malicious skills moved from pass to fail.
+- **Most of the strict gain comes from one severity change.** Instructions to extract
+  an archive with a given password (the fake-prerequisite dropper) now block instead of
+  warning. A stray match across a sentence boundary, the only benign hit this caused,
+  was fixed before release.
+- **Shipped bytecode** (`__pycache__/*.pyc`, the PyCache Trap technique) is now caught
+  in the SkillTrustBench samples that use it.
+- **The evasion fixes barely move these numbers**, which is expected. The datasets
+  were not built to dodge Husk's specific rules. Those fixes are covered by regression
+  tests in `tests/test_evasions_2026_10.py` instead.
+- **The loose increase on benign skills is 3 + 1 skills.** The cause is newly scanned
+  `.mjs`/`.cjs` files and SQL f-strings in Python that a comment elsewhere used to
+  excuse. None of them block.
+- **Not re-run this round:** the ASB-derived set (7,280) and the 699-skill competitor
+  head-to-head below. Those numbers are still 1.3.5's.
+
 # 2026-09 head-to-head: Husk vs. 16 skill scanners, one shared sample
 
 This replaces the earlier per-tool comparison. Earlier runs gave each tool a different,
@@ -196,10 +235,10 @@ fix changed no verdicts on the 699-skill sample.
 
 | | Result |
 |---|---|
-| **MalSkillBench** recall (3,944 real malicious samples, full dataset) | **67.3% (2,653/3,944)** |
+| **MalSkillBench** recall (3,944 real malicious samples, full dataset) | **67.5% (2,661/3,944)** (1.4.0) |
 | **ASB-derived** recall (7,280 real malicious samples) | **64.8% (4,717/7,280)** |
 | False positives, curated real-skill baseline (249 samples) | **248/249 (99.6%) clean** |
-| False positives, MalSkillBench benign set (4,000 samples, full dataset) | **95.4% (3,816/4,000) clean** |
+| False positives, MalSkillBench benign set (4,000 samples, full dataset) | **95.3% (3,813/4,000) clean** (1.4.0; none of the 3 new ones block) |
 | Validation against an independent labeled corpus (cisco-ai-defense/skill-scanner, 27 fixtures) | **13/16 malicious caught, 0 false positives on 11 safe** |
 
 (1.3.5 re-run from scratch on all 15,473 samples, 2026-09-29. Compared with the

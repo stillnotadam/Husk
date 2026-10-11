@@ -807,3 +807,37 @@ def test_big_repo_rate_limited_returns_none(monkeypatch):
     monkeypatch.setattr(aggregator, "_gh_api", api)
     monkeypatch.setattr(aggregator.urllib.request, "urlopen", _raw_server({}))
     assert aggregator.resolve_skillssh_skill("o/r/vigil") is None
+
+
+def test_clawhub_verdict_uses_verify_when_verdicts_endpoint_needs_auth(fake_clawhub, monkeypatch):
+    # ClawHub documents the verdicts endpoint as token-only and only returns
+    # `moderation` for flagged skills: a clean skill must still get a verdict.
+    fake_clawhub.skills["fallback-skill"]["moderation"] = None
+    result = agg._fetch_clawhub_native_audit("carol/fallback-skill")
+    assert result["available"] is True
+    assert result["verdict"] == "clean"
+    assert result["verdict_source"] == "verify"
+
+
+def test_clawhub_token_is_sent_only_to_clawhub(monkeypatch):
+    seen = {}
+
+    class _Resp(_io.BytesIO):
+        headers = {"Content-Type": "application/json"}
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *a):
+            return False
+
+    def fake_urlopen(req, timeout=None):
+        seen[req.full_url] = req.get_header("Authorization")
+        return _Resp(b"{}")
+
+    monkeypatch.setenv("CLAWHUB_TOKEN", "t0k")
+    monkeypatch.setattr(agg.urllib.request, "urlopen", fake_urlopen)
+    agg._http("GET", agg.CLAWHUB_API + "/api/v1/skills/x")
+    agg._http("GET", "https://clawhub.ai.evil.example/api")
+    assert seen[agg.CLAWHUB_API + "/api/v1/skills/x"] == "Bearer t0k"
+    assert seen["https://clawhub.ai.evil.example/api"] is None
