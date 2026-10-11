@@ -45,6 +45,9 @@ husk = "husk.cli:main"
 [tool.setuptools.packages.find]
 where = ["src"]
 
+[tool.setuptools.package-data]
+"husk.engine" = ["rules/*.yml"]
+
 [tool.ruff]
 line-length = 120
 target-version = "py39"

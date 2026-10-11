@@ -4,6 +4,44 @@ All notable changes to Husk are documented here. Format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.0.0/); versioning
 follows [Semantic Versioning](https://semver.org/).
 
+## [Unreleased]
+
+### Added
+- **Analysis engine** ([docs/ENGINE.md](docs/ENGINE.md)). A second detection layer that
+  models what code does instead of what it looks like. Shell and Python front ends turn
+  code - including code in Markdown fences, inline code, command lines in prose,
+  `package.json` scripts and Dockerfile `RUN` lines - into values labelled `remote`,
+  `secret` or `decoded`, and record when one reaches a sink: `exec`, `inject`, `send` or
+  `persist`. The shell front end follows pipes, `$(...)`, backticks, `<(...)`,
+  here-strings, heredocs, variables, files written and later run, wrappers like
+  `sudo -E`, and decoded payloads, which are analysed in turn. The Python front end
+  follows assignments, f-strings, function returns, `with` blocks, HTTP clients, path
+  helpers and files written then run.
+- Six rules, as data in `engine/rules/core.yml`: credentials sent over the network
+  (critical), a download installed to run at every login (critical), downloaded code
+  executed (high; info from official installer hosts), downloaded data spliced into code
+  (medium), decoded data executed (high), decoded data installed to run at login (high).
+- Every engine finding carries its evidence chain, e.g. `line 2 fetches https://x/p ->
+  line 2 saves it to /tmp/p -> line 3 runs /tmp/p with sh`. `husk explain` shows it step
+  by step for shell, Python and Markdown files, and `--json` gives the steps.
+- `husk rules` lists the rules (`-v` explains them, `--json`). Custom rules:
+  `HUSK_RULES=team.yml`, validated with `husk rules --check team.yml`, with errors that
+  name the file, line and field. The rule format is a strict YAML subset, so no new
+  dependency.
+- `dataset_bench.py`: `label=dir/**` scans every folder holding a `SKILL.md` at any
+  depth.
+
+### Measured
+- SkillTrustBench malicious blocked: 50.7% -> **59.9%**. MalSkillBench malicious:
+  45.5% -> **48.2%**. False alarms unchanged: 2.8% on MalSkillBench benign, 1.7% on
+  SkillTrustBench normal, and 248 of 249 hand-checked legitimate skills still pass.
+  The engine alone blocks 17-22% of malicious skills, at 0.6% false alarms on
+  MalSkillBench benign and none on the hand-checked set.
+
+### Changed
+- Official installers of Tailscale, Cursor, Ollama, mise, SDKMAN, OpenClaw, Perfetto,
+  nvm and golangci-lint join the trusted-installer list (info, not a block).
+
 ## [1.4.1] - 2026-10-11
 
 ### Security

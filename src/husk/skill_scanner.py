@@ -44,6 +44,7 @@ import re
 import sys
 import unicodedata
 
+from . import engine
 from .js_taint_analysis import analyze_js_taint
 from .taint_analysis import analyze_taint_flows
 
@@ -210,6 +211,11 @@ TRUSTED_INSTALL_HOSTS = (
     # MalSkillBench benign set.
     "deb.nodesource.com", "rpm.nodesource.com", "packagecloud.io/install/repositories",
     "release.anza.xyz", "release.solana.com", "sugar.metaplex.com",
+    # Added with the analysis engine (1.5.0): official installers of widely
+    # used tools, seen in the MalSkillBench and SkillTrustBench benign sets.
+    "tailscale.com/install.sh", "cursor.com/install", "ollama.ai/install.sh", "mise.run",
+    "get.sdkman.io", "openclaw.ai/install.sh", "get.perfetto.dev",
+    "raw.githubusercontent.com/nvm-sh/nvm", "raw.githubusercontent.com/golangci/golangci-lint",
 )
 _INSTALL_URL_RE = re.compile(r"https?://([^\s|'\")]+)", re.IGNORECASE)
 
@@ -3595,6 +3601,38 @@ def scan_skill_file(path, kind=None):
         _SCANNING_PROSE.reset(token)
 
 
+def engine_report(text, ext):
+    """Analysis-engine findings (structured), with the same documentation
+    context the regex rules get: in prose, a command under "never run ..." /
+    "red flags: ..." is an example, not an instruction."""
+    try:
+        out = engine.report(engine.analyze_flows(text, ext))
+    except RecursionError:
+        return []
+    prose = ext in PROSE_EXTENSIONS or ext == ""
+    if not out or not prose:
+        return out
+    starts = [0] + [m.end() for m in re.finditer("\n", text)]
+    token = _SCANNING_PROSE.set(True)
+    try:
+        kept = []
+        for r in out:
+            n = r["line"] - 1
+            # Checked from the end of the line, so "never run: curl ... | bash" counts.
+            line_end = starts[n + 1] - 1 if 0 <= n < len(starts) - 1 else len(text)
+            if 0 <= n < len(starts) and _is_negated(text, line_end):
+                continue
+            kept.append(r)
+        return kept
+    finally:
+        _SCANNING_PROSE.reset(token)
+
+
+def _engine_findings(text, ext):
+    return [f"{SOFT_FINDING_MARKER if r['severity'] == 'info' else ''}Line {r['line']}: "
+            f"[{r['rule']} {r['severity']}] {r['title']}: {r['chain']}" for r in engine_report(text, ext)]
+
+
 def _scan_text(text, ext):
     findings = []
 
@@ -3798,6 +3836,9 @@ def _scan_text(text, ext):
     findings.extend(find_role_hijack(text))
     findings.extend(find_download_then_execute(text))
     findings.extend(find_remote_code_execution(text))
+    # The analysis engine (husk/engine): dataflow through shell and Python,
+    # rules from engine/rules/*.yml, each finding with its evidence chain.
+    findings.extend(_engine_findings(text, ext))
     findings.extend(find_shell_startup_persistence(text))
     findings.extend(find_blindspot_persistence(text))
     findings.extend(find_credential_file_hunt(text))

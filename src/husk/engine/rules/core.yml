@@ -1,0 +1,48 @@
+# Husk engine core rules. Format: see src/husk/engine/rules.py.
+# A flow is reported by the first rule here that matches it.
+
+- id: HUSK-EXF-001
+  title: credentials are sent over the network
+  severity: critical
+  from: [secret]
+  to: send
+  explain: A credential file, the keychain or the whole environment reaches a network send. Sending one API key to its own service is not this rule; reading ~/.aws/credentials or dumping env and posting it is.
+
+- id: HUSK-PER-001
+  title: downloaded code is installed to run at every login
+  severity: critical
+  from: [remote]
+  to: persist
+  explain: Fetched content, or a command that fetches and runs something, is written to a shell startup file, crontab, launchd or systemd. It survives the skill being removed.
+
+- id: HUSK-RCE-001
+  title: downloaded code is executed
+  severity: high
+  from: [remote]
+  to: exec
+  trusted_installers: info
+  explain: Content fetched from the network runs as code without review, through any route - a pipe, process substitution, sh -c "$(...)", eval, a here-string, a file saved and run later, exec() in Python. Official installer hosts (rustup, uv, Docker, NodeSource, ...) are reported as info.
+
+- id: HUSK-INJ-001
+  title: downloaded data is spliced into code
+  severity: medium
+  from: [remote]
+  to: inject
+  explain: A response is interpolated into a fixed program (python3 -c "...$RESPONSE...", a heredoc) or passed to Python's eval(). Not malware by itself, but whoever controls that server can run code.
+
+# Measured 2026-10: grading a decoded payload that looks harmless as medium
+# lost 64 malware samples for 2 benign ones (the decoded commands were reverse
+# shells and deletions no other engine rule covers yet), so this stays high.
+- id: HUSK-OBF-001
+  title: decoded data is executed
+  severity: high
+  from: [decoded]
+  to: exec
+  explain: Base64, hex or another encoding is decoded and run. The encoding has no purpose except keeping the code out of sight of a reviewer.
+
+- id: HUSK-PER-002
+  title: decoded data is installed to run at every login
+  severity: high
+  from: [decoded]
+  to: persist
+  explain: Encoded content is decoded into a startup file, crontab, launchd or systemd.

@@ -43,6 +43,7 @@ SEVERITY_ORDER = ["critical", "high", "medium", "low", "info"]
 _SEVERITY_RULES = [
     # --- critical: unambiguous, high-impact malicious behaviour ---
     ("critical", re.compile(
+        r"\[HUSK-[A-Z0-9-]+ critical\]|"  # analysis-engine rules carry their own severity
         r"credential-harvesting pattern"
         r"|REASSEMBLE INTO A DANGEROUS PAYLOAD"
         r"|reads '/etc/shadow'|reads '/etc/sudoers'"
@@ -68,6 +69,7 @@ _SEVERITY_RULES = [
         r"|sends to a Telegram bot endpoint", re.IGNORECASE)),
     # --- high: strong indicators, but context can occasionally be legit ---
     ("high", re.compile(
+        r"\[HUSK-[A-Z0-9-]+ high\]|"  # analysis-engine rules carry their own severity
         r"Pipes a downloaded script directly into a shell"
         r"|remote code execution - "
         r"|downloads a script over unencrypted HTTP"
@@ -93,6 +95,7 @@ _SEVERITY_RULES = [
         r"|JS/TS taint-tracked data flow", re.IGNORECASE)),
     # --- medium: runtime code-exec / shell primitives, common but risky ---
     ("medium", re.compile(
+        r"\[HUSK-[A-Z0-9-]+ medium\]|"  # analysis-engine rules carry their own severity
         r"Uses exec\(\)|Uses eval\(\)|Compiles a string into executable"
         r"|compile\(\) is called with a variable"
         r"|uses shell=True|Direct shell command execution"
@@ -104,6 +107,7 @@ _SEVERITY_RULES = [
         r"|world-writable|elevated privileges|Docker socket", re.IGNORECASE)),
     # --- low: hygiene / worth-a-look, rarely malicious on its own ---
     ("low", re.compile(
+        r"\[HUSK-[A-Z0-9-]+ low\]|"  # analysis-engine rules carry their own severity
         r"named/typed as a path|'while True:' loop"
         r"|logs a variable whose name suggests a credential"
         r"|osascript|unusually long hidden comment"

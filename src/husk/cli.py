@@ -11,7 +11,9 @@ import argparse
 import glob
 import json
 import os
+import re
 import sys
+import textwrap
 
 from husk import __version__ as HUSK_VERSION
 
@@ -23,6 +25,7 @@ from .attestation import (
 )
 from .badge import badge_html, badge_markdown
 from .crossref import crossref_skill
+from .engine import RuleError, load_rules, parse_rules
 from .gate import evaluate as gate_evaluate
 from .gate import load_policy, restrict_to_tightening
 from .js_taint_analysis import analyze_js_taint
@@ -41,7 +44,7 @@ from .registry_store import stats as reg_stats
 from .reporting import apply_suppressions, write_sarif
 from .sandbox import sandbox_run_script
 from .scan_cache import scan_many
-from .skill_scanner import scan_skill_file
+from .skill_scanner import decode_text, engine_report, scan_skill_file
 from .taint_analysis import analyze_taint_flows
 from .virustotal_check import check_package_against_virustotal
 from .watch import watch as watch_skills
@@ -495,50 +498,100 @@ def cmd_explain(args):
     source -> variable -> sink path behind each taint finding. The 'why' a
     security reviewer trusts over a bare verdict - and something an LLM review
     cannot produce deterministically."""
+    js_exts = (".js", ".ts", ".mjs", ".cjs", ".jsx", ".tsx")
+    engine_exts = (".py", ".sh", ".bash", ".zsh", ".md", ".mdc", ".txt", ".rst", ".json")
     targets = []
     if os.path.isfile(args.path):
         targets = [args.path]
     elif os.path.isdir(args.path):
-        for dp, _dirs, files in os.walk(args.path):
+        for dp, dirs, files in os.walk(args.path):
+            dirs[:] = [d for d in dirs if d not in (".git", "node_modules")]
             for fn in files:
-                if fn.lower().endswith((".py", ".js", ".ts", ".mjs", ".cjs", ".jsx", ".tsx")):
+                if fn.lower().endswith(js_exts + engine_exts) or "." not in fn:
                     targets.append(os.path.join(dp, fn))
     else:
         print(f"husk explain expects a file or directory, got: {args.path}", file=sys.stderr)
         return 2
 
-    all_traces = []
+    taint, chains = [], []
     for path in sorted(targets):
         try:
-            with open(path, encoding="utf-8", errors="replace") as fh:
-                code = fh.read()
+            with open(path, "rb") as fh:
+                code = decode_text(fh.read(1_000_000))
         except OSError:
             continue
-        analyzer = (analyze_js_taint if path.lower().endswith(
-            (".js", ".ts", ".mjs", ".cjs", ".jsx", ".tsx")) else analyze_taint_flows)
-        for finding in analyzer(code):
-            rel = os.path.relpath(path, args.path) if os.path.isdir(args.path) else path
-            all_traces.append((rel, finding))
+        rel = os.path.relpath(path, args.path) if os.path.isdir(args.path) else path
+        lower = path.lower()
+        ext = os.path.splitext(lower)[1]
+        if code.startswith("#!") and re.search(r"\b(?:ba|z|da|k)?sh\b", code.split("\n", 1)[0]):
+            ext = ".sh"
+        if lower.endswith(js_exts):
+            taint += [(rel, f) for f in analyze_js_taint(code)]
+            continue
+        if ext == ".py":
+            taint += [(rel, f) for f in analyze_taint_flows(code)]
+        if ext in engine_exts or not ext:
+            chains += [(rel, r) for r in engine_report(code, ext)]
 
     if args.json:
-        print(json.dumps([
-            {"file": rel, **finding.to_dict()} for rel, finding in all_traces
-        ], indent=2))
-        return 1 if all_traces else 0
+        print(json.dumps(
+            [{"file": rel, "kind": "taint", **f.to_dict()} for rel, f in taint]
+            + [{"file": rel, "kind": "engine", **r} for rel, r in chains], indent=2))
+        return 1 if (taint or chains) else 0
 
-    if not all_traces:
-        print("\nNo data-flow (taint) findings to explain in this target.\n")
+    if not taint and not chains:
+        print("\nNo data-flow findings to explain in this target.\n")
         return 0
 
-    print(f"\nHusk data-flow traces ({len(all_traces)} flow(s)):\n")
-    for rel, finding in all_traces:
-        print(f"  {rel}:")
-        for step in finding.trace():
-            print(f"    {step}")
-        print()
-    print("Each trace is a real source->variable->sink path found by AST analysis, "
-          "not text matching.\n")
+    if chains:
+        print(f"\nHusk analysis engine ({len(chains)} finding(s)):\n")
+        for rel, r in chains:
+            print(f"  {rel}:{r['line']}  [{r['rule']} {r['severity']}] {r['title']}")
+            for s in r["steps"]:
+                print(f"    line {s['line']:<5} {s['text']}")
+            print()
+    if taint:
+        print(f"\nHusk data-flow traces ({len(taint)} flow(s)):\n")
+        for rel, finding in taint:
+            print(f"  {rel}:")
+            for step in finding.trace():
+                print(f"    {step}")
+            print()
+    print("Each trace is a real path found by parsing the code (shell, Python, JS), "
+          "not text matching. `husk rules` lists the rules.\n")
     return 1
+
+
+def cmd_rules(args):
+    """List the analysis-engine rules, or validate a rule file."""
+    if args.check:
+        try:
+            with open(args.check, encoding="utf-8") as fh:
+                rules = parse_rules(fh.read(), os.path.basename(args.check))
+            load_rules([args.check])  # also rejects ids that clash with core rules
+        except (OSError, RuleError) as exc:
+            print(f"husk rules: {exc}", file=sys.stderr)
+            return 2
+        print(f"{args.check}: {len(rules)} rule(s) OK")
+        return 0
+    try:
+        rules = load_rules(args.add or None)
+    except (OSError, RuleError) as exc:
+        print(f"husk rules: {exc}", file=sys.stderr)
+        return 2
+    if args.json:
+        print(json.dumps([{"id": r.id, "title": r.title, "severity": r.severity, "from": sorted(r.labels),
+                           "to": r.sink, "trusted_installers": r.trusted_installers or None,
+                           "explain": r.explain, "source": r.source} for r in rules], indent=2))
+        return 0
+    print(f"\nHusk analysis-engine rules ({len(rules)}):\n")
+    for r in rules:
+        print(f"  {r.id:<14} {r.severity:<9} {'/'.join(sorted(r.labels))} -> {r.sink:<8} {r.title}")
+        if args.verbose and r.explain:
+            print(textwrap.indent(textwrap.fill(r.explain, 88), " " * 17))
+            print(" " * 17 + f"({r.source})")
+    print("\nAdd your own with HUSK_RULES=path/to/rules.yml (format: `husk rules --check FILE`).\n")
+    return 0
 
 
 def cmd_registry(args):
@@ -833,9 +886,19 @@ def main():
              "behind taint findings - the auditable 'why' an AI review can't "
              "produce deterministically.",
     )
-    p_explain.add_argument("path", help="A .py file or a package directory")
+    p_explain.add_argument("path", help="A file (.sh, .py, .md, .js, ...) or a package directory")
     p_explain.add_argument("--json", action="store_true", help="Emit structured traces as JSON")
     p_explain.set_defaults(func=cmd_explain)
+
+    p_rules = subparsers.add_parser(
+        "rules",
+        help="List the analysis-engine rules (which data reaching which sink is a finding), "
+             "or validate a custom rule file.")
+    p_rules.add_argument("-v", "--verbose", action="store_true", help="Show each rule's explanation")
+    p_rules.add_argument("--add", action="append", metavar="FILE", help="Include a custom rule file")
+    p_rules.add_argument("--check", metavar="FILE", help="Validate a custom rule file and exit")
+    p_rules.add_argument("--json", action="store_true", help="Emit the rules as JSON")
+    p_rules.set_defaults(func=cmd_rules)
 
     p_registry = subparsers.add_parser(
         "registry",

@@ -8,9 +8,9 @@
 | **At publish** | `husk attest` | A signed, reproducible [in-toto](https://github.com/in-toto/attestation) attestation bound to the skill's exact bytes |
 | **Across registries** | `husk crossref` | Detects the same skill serving *different content* on different marketplaces (a substitution attack) |
 | **After install** | `husk watch` | Alerts when an installed skill that was safe turns malicious after an update |
-| **Any time** | `husk explain` | Shows the exact source&rarr;variable&rarr;sink data-flow trace behind a finding - the auditable *why* |
+| **Any time** | `husk explain` | Shows the exact chain of lines behind a finding (`line 2 fetches ... -> line 2 saves it to /tmp/p -> line 3 runs /tmp/p with sh`) - the auditable *why* |
 
-Underneath is a detection engine with **real AST-based taint analysis for both Python and JavaScript/TypeScript** (not just regex), that **reads bundled PDFs** where attackers hide instructions, and that deterministically catches **no-code prompt-injection** attacks usually assumed to require an LLM. Built to defeat bypass techniques shown, in published 2026 research, to beat production scanners from Snyk, Cisco, and Vercel's skills.sh - benchmarked on **11,224 real malicious samples** (see below), clearing **99.6%** of real legitimate skills. Everything is offline, deterministic, and open-source (AGPL-3.0). No marketplace lock-in, no API keys, no data leaves your machine.
+Underneath is an **analysis engine that models what code does, not what it looks like**: it parses shell (pipes, `$(...)`, `<(...)`, heredocs, variables, files written then run) and Python, follows data from where it came from (a download, a credential file, a base64 decode) to where it goes (an interpreter, the network, a startup file), and reports each finding with the chain of lines that proves it ([how it works](docs/ENGINE.md)). Next to it: AST taint analysis for Python and JavaScript/TypeScript, that **reads bundled PDFs** where attackers hide instructions, and that deterministically catches **no-code prompt-injection** attacks usually assumed to require an LLM. Built to defeat bypass techniques shown, in published 2026 research, to beat production scanners from Snyk, Cisco, and Vercel's skills.sh - benchmarked on **11,224 real malicious samples** (see below), clearing **99.6%** of real legitimate skills. Everything is offline, deterministic, and open-source (AGPL-3.0). No marketplace lock-in, no API keys, no data leaves your machine.
 
 [CHANGELOG](CHANGELOG.md) - what's new in each release, actively maintained.
 
@@ -127,7 +127,10 @@ Beyond the self-built test suite, Husk's hidden-instruction detector has been ve
 
 ## How detection works, honestly
 
-Husk does not use machine learning or an LLM to decide whether something is safe. Every check is deterministic: opcode inspection for pickle files, pattern matching against known-dangerous constructs, real binary signature checks for archives, and a lightweight constant-propagation pass that resolves simple string concatenation before pattern matching, specifically to catch payloads split across variables to dodge plain-text detection.
+Husk does not use machine learning or an LLM to decide whether something is safe. Every check is deterministic, in two layers:
+
+- **The analysis engine** ([docs/ENGINE.md](docs/ENGINE.md)) parses shell and Python, including code inside Markdown, and tracks labelled data (`remote`, `secret`, `decoded`) to sinks (`exec`, `send`, `persist`). Rules are data in [`engine/rules/core.yml`](src/husk/engine/rules/core.yml); `husk rules -v` lists them, and teams can add their own with `HUSK_RULES=team.yml`. Since it reasons about where data goes rather than how a command is spelled, `bash <(curl ...)`, `sh -c "$(curl ...)"`, `eval "$(curl ...)"` and a download saved and run three code blocks later are all the same finding. On its own it blocks 17-22% of malicious skills at 0.6% false alarms; added to the pattern layer it raised SkillTrustBench blocking from 50.7% to 59.9% with no new false alarms.
+- **The pattern layer**: opcode inspection for pickle files, pattern matching against known-dangerous constructs, real binary signature checks for archives, AST taint tracking for Python and JS, and a lightweight constant-propagation pass that resolves simple string concatenation before pattern matching, specifically to catch payloads split across variables to dodge plain-text detection.
 
 This is a first version. It has been adversarially self-tested - evasion variants were built specifically to try to defeat each check, two real gaps were found in that process (Unicode whitespace padding, and base64 payloads split across multiple short fragments), and both were fixed and re-verified. That process is ongoing; no static scanner is ever a finished, unbeatable thing, and Husk does not claim to be one.
 
@@ -167,8 +170,12 @@ husk crossref owner/skill-name
 # Watch installed skills over time - alert if one turns malicious after an update
 husk watch
 
-# Explain WHY: the exact source -> variable -> sink data-flow behind a finding
+# Explain WHY: the exact chain of lines behind each engine and taint finding
 husk explain path/to/skill_package/
+
+# List the analysis-engine rules (-v explains each); validate your own rule file
+husk rules -v
+husk rules --check team-rules.yml
 
 # Scan a whole registry / skills dir incrementally (only changed skills re-scanned)
 husk registry ~/.claude/skills

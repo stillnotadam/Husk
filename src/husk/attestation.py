@@ -115,10 +115,16 @@ def compute_ruleset_digest():
     here = os.path.dirname(os.path.abspath(__file__))
     rule_files = ["skill_scanner.py", "package_scanner.py", "taint_analysis.py",
                   "pickle_scanner.py", "gate.py", "js_taint_analysis.py",
-                  "pdf_extract.py", "context_classifier.py"]
+                  "pdf_extract.py", "context_classifier.py",
+                  "engine/__init__.py", "engine/extract.py", "engine/model.py",
+                  "engine/python_frontend.py", "engine/rules.py", "engine/shell.py",
+                  "engine/rules/core.yml"]
+    # Custom engine rules (HUSK_RULES) change verdicts too, so they are part of the ruleset.
+    custom = [p for p in os.environ.get("HUSK_RULES", "").split(os.pathsep) if p]
     hasher = hashlib.sha256()
-    for name in rule_files:
-        path = os.path.join(here, name)
+    entries = [(n, os.path.join(here, n)) for n in rule_files]
+    entries += [("custom:" + os.path.basename(p), os.path.abspath(p)) for p in custom]
+    for name, path in entries:
         try:
             with open(path, "rb") as fh:
                 hasher.update(name.encode("utf-8"))

