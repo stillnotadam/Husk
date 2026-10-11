@@ -1,7 +1,7 @@
 """Husk analysis engine.
 
 The regex checks in skill_scanner.py match the shape of an attack. The
-engine models what code does: front ends (shell, Python) turn code into
+engine models what code does: front ends (shell, Python, JavaScript) turn code into
 values carrying labels (remote, secret, decoded) with a provenance trail,
 and record every time such a value reaches a sink (exec, send, persist).
 Rules - data, in rules/*.yml - say which of those flows are findings.
@@ -13,6 +13,7 @@ Every finding carries its evidence chain, e.g.
 import re
 
 from .extract import snippets
+from .js_frontend import analyze_js
 from .model import Flow, Step, Value
 from .python_frontend import analyze_python
 from .rules import Rule, RuleError, load_rules, parse_rules
@@ -38,6 +39,8 @@ def analyze_flows(text, ext, shebang_shell=False):
             shell_state = analyze_shell(code, ctx, line, state=shell_state)
         elif lang == "python":
             analyze_python(code, ctx, line)
+        elif lang == "js":
+            analyze_js(code, ctx, line)
     return ctx.flows
 
 

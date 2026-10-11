@@ -1,6 +1,6 @@
 # The Husk analysis engine
 
-Husk 1.5 adds a second detection layer next to its pattern checks. The pattern
+Husk 1.5 added a second detection layer next to its pattern checks. The pattern
 checks match what an attack *looks like*. The engine models what code *does*:
 where data comes from, what happens to it, and whether those two meet. This
 document describes how it works, what it measures, and what it does not do yet.
@@ -68,9 +68,27 @@ downloaded file, `pickle`/`marshal` loads, `eval` (an injection, not RCE, unless
 the input was decoded), `requests.post`/`put`/`patch`, `urlopen` with data,
 sockets, `sendmail`.
 
+**JavaScript / TypeScript** (`engine/js_frontend.py`, since 1.6). The same model over
+the esprima AST. Modules are resolved through `require`/`import` aliases, destructuring
+and `util.promisify`, so `const {exec: run} = require("node:child_process")` is still
+`child_process.exec`. Values flow through template literals, `await`, `.then` callbacks,
+stream events (`res.on("data", ...)`), function returns and files written to disk.
+Sources: `fetch`, axios, got, needle, superagent, ky, request, undici, `http(s).get`;
+the whole `process.env` (not `process.env.KEY` or `process.env[name]`); credential
+files; `Buffer.from(x, "base64")`, `atob`, `String.fromCharCode`. Sinks: `eval`,
+`new Function`, `vm`, `module._compile`, string `setTimeout`, `require()` of a
+downloaded file; request bodies, secrets in URLs, `http.request`/socket writes,
+`sendBeacon`, `sendMail`, DNS lookups; `fs` writes to startup files.
+`child_process` commands are not judged in JavaScript at all: the command line is
+rebuilt with each JavaScript value bound to a shell variable and handed to the shell
+front end, so ``execSync(`curl ${u} | sh`)`` gets exactly the shell's verdict, and a
+fetched value used as a `git` argument is not mistaken for code. TypeScript is
+parsed after stripping annotations; syntax newer than esprima 4 (`?.`, `??`, optional
+`catch` bindings, top-level `await` next to `import`) is rewritten in place first.
+
 **Documents** (`engine/extract.py`). Skills are mostly Markdown, so the extractor
 finds code wherever it is: fenced blocks (`bash`, `console` with prompts
-stripped, `python`, `dockerfile`), inline code spans, and prose lines that start
+stripped, `python`, `js`/`ts`, `dockerfile`), inline code spans, and prose lines that start
 with a command (`Run: curl ... | sh`). Blocks in one document share state, so a
 download in one block and its execution three blocks later are connected. It
 also reads `package.json` scripts, Dockerfile `RUN` lines and Makefile recipes.
@@ -111,6 +129,10 @@ is an example, not an instruction.
 
 ## Measured
 
+1.6 adds the JavaScript front end: +2 malicious skills blocked, +0 benign (see
+BENCHMARK.md). The 1.5 numbers below were re-measured with esprima and pypdf
+installed and are unchanged.
+
 Benchmarked with `benchmarks/dataset_bench.py`, default gate policy, no LLM.
 
 Engine on its own, six rules:
@@ -149,8 +171,6 @@ Choices that were measured, not assumed:
 
 ## What it does not do yet
 
-- **JavaScript** is still covered by the separate esprima taint tracker, not
-  the engine.
 - **No flows across files.** A download in `SKILL.md` and its execution in
   `scripts/run.sh` are not connected unless the path names match inside one
   file.
@@ -163,10 +183,12 @@ Choices that were measured, not assumed:
 
 ## Next
 
-1. Retire the pattern checks the engine now covers (`curl | bash`, download then
-   execute, the 1.4.1 remote-execution regexes), after confirming on the
-   benchmarks that nothing is lost.
-2. A JavaScript/TypeScript front end on the existing esprima parser.
-3. Cross-file flows within a package.
-4. More sources and sinks: reverse shells, destructive deletes, agent-config
+1. Retire the pattern checks the engine covers. Measured in 1.6: the pattern
+   findings for the same events (curl | bash, decode-and-run, compile-and-run,
+   `shell=True`) also catch skills the engine misses, so deleting them would
+   lose detections. 1.6 merges them into the engine finding instead when both
+   fire on the same line; removing them waits for the engine to cover those
+   skills too.
+2. Cross-file flows within a package.
+3. More sources and sinks: reverse shells, destructive deletes, agent-config
    writes (`~/.claude`, `AGENTS.md`), MCP server definitions.

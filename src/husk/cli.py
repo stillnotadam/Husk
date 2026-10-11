@@ -527,6 +527,7 @@ def cmd_explain(args):
             ext = ".sh"
         if lower.endswith(js_exts):
             taint += [(rel, f) for f in analyze_js_taint(code)]
+            chains += [(rel, r) for r in engine_report(code, ext)]
             continue
         if ext == ".py":
             taint += [(rel, f) for f in analyze_taint_flows(code)]

@@ -19,6 +19,17 @@ from concurrent.futures import ProcessPoolExecutor
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "src"))
 
+# Husk without its dependencies still runs, minus the JavaScript analysis
+# (esprima) and PDF text (pypdf), so a benchmark in a bare interpreter would
+# measure a different scanner than the one users install. Before 1.6.0 the
+# published numbers were measured that way; refuse instead.
+for _dep in ("esprima", "pypdf"):
+    try:
+        __import__(_dep)
+    except ImportError:
+        sys.exit(f"dataset_bench: '{_dep}' is not installed; install Husk's dependencies "
+                 f"(pip install -e .) so the benchmark measures the scanner users get.")
+
 from husk.gate import evaluate
 from husk.package_scanner import scan_package
 

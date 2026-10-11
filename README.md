@@ -129,7 +129,7 @@ Beyond the self-built test suite, Husk's hidden-instruction detector has been ve
 
 Husk does not use machine learning or an LLM to decide whether something is safe. Every check is deterministic, in two layers:
 
-- **The analysis engine** ([docs/ENGINE.md](docs/ENGINE.md)) parses shell and Python, including code inside Markdown, and tracks labelled data (`remote`, `secret`, `decoded`) to sinks (`exec`, `send`, `persist`). Rules are data in [`engine/rules/core.yml`](src/husk/engine/rules/core.yml); `husk rules -v` lists them, and teams can add their own with `HUSK_RULES=team.yml`. Since it reasons about where data goes rather than how a command is spelled, `bash <(curl ...)`, `sh -c "$(curl ...)"`, `eval "$(curl ...)"` and a download saved and run three code blocks later are all the same finding. On its own it blocks 17-22% of malicious skills at 0.6% false alarms; added to the pattern layer it raised SkillTrustBench blocking from 50.7% to 59.9% with no new false alarms.
+- **The analysis engine** ([docs/ENGINE.md](docs/ENGINE.md)) parses shell, Python and JavaScript/TypeScript, including code inside Markdown, and tracks labelled data (`remote`, `secret`, `decoded`) to sinks (`exec`, `send`, `persist`). Rules are data in [`engine/rules/core.yml`](src/husk/engine/rules/core.yml); `husk rules -v` lists them, and teams can add their own with `HUSK_RULES=team.yml`. Since it reasons about where data goes rather than how a command is spelled, `bash <(curl ...)`, `sh -c "$(curl ...)"`, `eval "$(curl ...)"` and a download saved and run three code blocks later are all the same finding. On its own it blocks 17-22% of malicious skills at 0.6% false alarms; added to the pattern layer it raised SkillTrustBench blocking from 50.7% to 59.9% with no new false alarms.
 - **The pattern layer**: opcode inspection for pickle files, pattern matching against known-dangerous constructs, real binary signature checks for archives, AST taint tracking for Python and JS, and a lightweight constant-propagation pass that resolves simple string concatenation before pattern matching, specifically to catch payloads split across variables to dodge plain-text detection.
 
 This is a first version. It has been adversarially self-tested - evasion variants were built specifically to try to defeat each check, two real gaps were found in that process (Unicode whitespace padding, and base64 payloads split across multiple short fragments), and both were fixed and re-verified. That process is ongoing; no static scanner is ever a finished, unbeatable thing, and Husk does not claim to be one.
@@ -146,7 +146,7 @@ For development (editable install, includes the test suite and dev tools):
 git clone https://github.com/ctrl-adam/Husk.git
 cd Husk
 pip install -e ".[dev]"
-python3 -m pytest tests/ -v   # 534 passed, 10 xfailed
+python3 -m pytest tests/ -v   # 583 passed, 10 xfailed
 ```
 
 ## Usage
@@ -389,7 +389,7 @@ exactly that.
 
 ## What v1 does NOT do yet
 
-- **Real-world recall is 64.8-67.5%, not 100%** (measured against 11,224 real confirmed-malicious samples across two independent datasets - see BENCHMARK.md for the full methodology). The main gap: **novel, semantically-disguised attacks with no code and no recognizable keywords** - a subtle instruction-blurring attack and a fake "compliance auditor" asking in plain prose for secrets, both missed by static analysis and saved openly in `tests/known_misses/` rather than hidden. This matches published research showing static pattern-matching tops out around 13-32% recall on novel/disguised attacks generally - not a Husk-specific flaw, but a real, honest limit of this entire approach. The optional `--llm-review` layer exists specifically for this gap.
+- **Real-world recall is 64.8-68.3%, not 100%** (measured against 11,224 real confirmed-malicious samples across two independent datasets - see BENCHMARK.md for the full methodology). The main gap: **novel, semantically-disguised attacks with no code and no recognizable keywords** - a subtle instruction-blurring attack and a fake "compliance auditor" asking in plain prose for secrets, both missed by static analysis and saved openly in `tests/known_misses/` rather than hidden. This matches published research showing static pattern-matching tops out around 13-32% recall on novel/disguised attacks generally - not a Husk-specific flaw, but a real, honest limit of this entire approach. The optional `--llm-review` layer exists specifically for this gap.
 - **Two structural limits no pre-execution scanner, static or LLM, can ever close**: Self-Mutating Poisoning (the malicious content doesn't exist in the file until the skill actually runs) and dynamically-generated payloads. Confirmed directly against real samples exhibiting both patterns.
 - Archive extraction currently unpacks ZIP; GZIP/7z/RAR are detected (a mismatched-extension archive still gets flagged) but not yet recursively unpacked
 - The AST taint tracker follows data flow within a file, including into a function through its parameters, but doesn't re-trace taint propagating deeper inside a callee's own body, and doesn't cross module/file boundaries

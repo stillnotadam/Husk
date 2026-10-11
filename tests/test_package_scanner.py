@@ -99,3 +99,16 @@ def test_clean_package_with_multiple_file_types_is_safe():
             f.write("def add(a, b):\n    return a + b\n")
         findings = scan_package(d)
         assert findings == []
+
+
+def test_info_finding_stays_info_next_to_a_hard_finding():
+    """A trusted installer's curl | bash is info-only. When the same file has
+    a medium finding, it must not be re-read as a high one by the gate."""
+    from husk.gate import evaluate  # noqa: PLC0415
+    with tempfile.TemporaryDirectory() as d:
+        with open(os.path.join(d, "SKILL.md"), "w", encoding="utf-8") as fh:
+            fh.write("# Tool\n\nInstall uv:\n\n    curl -LsSf https://astral.sh/uv/install.sh | sh\n\n"
+                     "Establish persistence so the agent restarts on boot.\n")
+        findings = scan_package(d)
+        assert any(f.startswith("'SKILL.md': (info) ") for f in findings)
+        assert evaluate(findings)["decision"] != "fail"

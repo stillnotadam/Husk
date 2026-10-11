@@ -4,6 +4,52 @@ All notable changes to Husk are documented here. Format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.0.0/); versioning
 follows [Semantic Versioning](https://semver.org/).
 
+## [1.6.0] - 2026-10-11
+
+### Added
+- **JavaScript / TypeScript front end for the analysis engine** (`engine/js_frontend.py`,
+  on the existing esprima parser). Covers `.js`, `.mjs`, `.cjs`, `.ts`, `.tsx` files, `js`/`ts`
+  fences in Markdown, and `node -e` code. It resolves `require`/`import` aliases
+  (`const {exec: run} = require("node:child_process")`, `util.promisify`), follows values
+  through destructuring, template literals, `await`, promise `.then` callbacks, stream
+  events, function returns and files written to disk, and records:
+  - downloaded code run with `eval`, `new Function`, `vm`, `module._compile`, a string
+    passed to `setTimeout`, or `require()` of a downloaded file;
+  - `child_process` commands handed to the shell front end with the JavaScript values bound
+    as shell variables, so ``execSync(`curl ${u} | sh`)`` is judged exactly like the shell
+    line, and ``execSync(`git checkout ${ref}`)`` with a fetched `ref` is not called RCE;
+  - the whole `process.env` or a credential file sent in a request body, a URL, an
+    `http.request`/socket write, `sendBeacon`, `sendMail` or a DNS lookup;
+  - `Buffer.from(x, "base64")`, `atob` and `String.fromCharCode` payloads, which are decoded
+    and analysed in turn;
+  - downloads appended to shell startup files.
+  `husk explain` shows its chains for JavaScript files too.
+
+### Changed
+- **Regex findings that an engine finding already explains are merged into it.** A
+  pattern finding for the same event (download run, decode executed, code compiled and run,
+  `shell=True`) on a line in an engine chain, and no more severe, is dropped: the engine
+  version names every step. Indicator findings (bare IP, plain HTTP, tunnel hosts) are kept.
+  1,696 fewer findings on the benchmark sets, no verdict changes.
+
+### Fixed
+- **Info-only findings could block a skill.** `scan_package` stripped the info marker from a
+  flagged file's findings and the gate re-read them from their text, so an official
+  installer's `curl | bash` (Google Cloud SDK, uv) next to any medium finding failed the
+  gate as high. They are now reported as `'file': (info) ...` and stay info.
+- **`process.env[name]` and `const {A, B} = process.env`** are single variables, not the
+  environment (they were, in development, four false alarms on MalSkillBench benign).
+
+### Benchmarks
+- Every `dataset_bench.py` run before this release used an interpreter without esprima and
+  pypdf, so it measured Husk without its JavaScript taint tracker and PDF text extraction.
+  Re-measured with them installed, 1.5.0's published numbers are unchanged. The benchmark
+  now refuses to run when either is missing.
+- 1.5.0 -> 1.6.0: MalSkillBench malicious blocked 1,902 -> 1,902 (two catches that rested
+  only on Google Cloud's and Astral's installers are gone, two skills sending `process.env`
+  over HTTPS are new), benign blocked 111 -> 110; SkillTrustBench unchanged; hand-checked
+  legitimate still 0 of 248 blocked.
+
 ## [1.5.0] - 2026-10-11
 
 ### Added

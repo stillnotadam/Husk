@@ -829,6 +829,9 @@ class ShellEvaluator:
         elif lang == "python":
             from .python_frontend import analyze_python  # noqa: PLC0415 - python_frontend imports this module
             analyze_python(text, self.ctx, line, self.depth + 1)
+        elif lang in ("node", "nodejs", "deno", "bun"):
+            from .js_frontend import analyze_js  # noqa: PLC0415 - js_frontend imports this module
+            analyze_js(text, self.ctx, line, self.depth + 1)
 
 
 class _InnerCapture:

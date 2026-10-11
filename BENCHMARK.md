@@ -5,6 +5,35 @@ testing sessions - this section is the current, accurate headline,
 everything below is the full supporting record (methodology, every
 competitor comparison, every bug found and fixed along the way).
 
+# 2026-10 (1.6.0): JavaScript in the engine, and a measurement correction
+
+**Correction.** Every `dataset_bench.py` run up to 1.5.0 used a Python without esprima and
+pypdf, Husk's two dependencies, so it measured Husk without its JavaScript taint tracker
+and PDF text extraction. Re-run with both installed (`v1.5.0` tag, same datasets), the 1.5.0
+numbers below are identical, so no published figure changes. The benchmark now refuses
+to run without them. The competitor head-to-heads used per-tool installs and were not
+affected.
+
+| Dataset | Skills | Strict, 1.5.0 | Strict, 1.6.0 | Loose, 1.5.0 | Loose, 1.6.0 |
+|---|---:|---:|---:|---:|---:|
+| MalSkillBench malicious | 3,944 | 48.2% (1,902) | 48.2% (1,902) | 68.3% | 68.4% |
+| SkillTrustBench malicious | 2,863 | 59.9% | 59.9% | 91.2% | 91.2% |
+| MalSkillBench benign (false alarms) | 4,000 | 2.8% (111) | **2.8% (110)** | 4.6% | 4.6% |
+| SkillTrustBench normal (false alarms) | 1,643 | 1.7% | 1.7% | 6.4% | 6.4% |
+| Hand-checked legitimate | 248 | 0 | 0 | 1 | 1 |
+
+- **JavaScript front end: +2 malicious, +0 benign.** Both new catches collect `process.env`
+  into an object and write it to an `https.request`. A first version also blocked four
+  benign skills that read `process.env[name]` or destructure `const {URL, KEY} =
+  process.env`; those are single variables, fixed before release. The datasets are mostly
+  Markdown and Python (147 JS files among 3,944 malicious skills), so the front end matters
+  more for what it closes than for these totals: the shapes in `tests/test_engine_js.py`.
+- **Info findings stay info: -2 malicious, -1 benign.** Two malicious skills were blocked
+  only because the gate re-read Google Cloud's and Astral's official installers as high
+  next to an unrelated medium finding. Both are still flagged.
+- **1,696 duplicate findings removed** (pattern findings an engine chain already explains),
+  with no verdict changes.
+
 # 2026-10 (1.5.0): the analysis engine
 
 1.5.0 adds a dataflow engine next to the pattern checks ([docs/ENGINE.md](docs/ENGINE.md)).

@@ -11,9 +11,11 @@ import re
 
 SHELL_EXTS = {".sh", ".bash", ".zsh", ".ksh", ".command", ".fish"}
 PYTHON_EXTS = {".py", ".pyw"}
+JS_EXTS = {".js", ".mjs", ".cjs", ".jsx", ".ts", ".mts", ".cts", ".tsx"}
 PROSE_EXTS = {".md", ".mdc", ".markdown", ".txt", ".rst", ".mdx", ""}
 _SHELL_FENCES = {"bash", "sh", "shell", "zsh", "console", "terminal", "shell-session", "shellsession", "ksh", "fish"}
 _PY_FENCES = {"python", "py", "python3"}
+_JS_FENCES = {"js", "javascript", "node", "nodejs", "mjs", "cjs", "jsx", "ts", "typescript", "tsx"}
 _FENCE = re.compile(r"^([ \t]*)(`{3,}|~{3,})[ \t]*([\w+-]*)[^\n]*\n(.*?)^\1\2[ \t]*$", re.MULTILINE | re.DOTALL)
 _INLINE = re.compile(r"(?<!`)`([^`\n]{4,400})`(?!`)")
 # Command words that start a runnable line in prose. Deliberately the ones
@@ -41,6 +43,8 @@ def snippets(text, ext, shebang_shell=False):
         return [("shell", text, 1)]
     if ext in PYTHON_EXTS:
         return [("python", text, 1)]
+    if ext in JS_EXTS:
+        return [("js", text, 1)]
     if ext == ".json":
         return _package_json(text)
     if ext in PROSE_EXTS:
@@ -59,6 +63,8 @@ def _prose(text):
             out.append((m.start(), ("shell", _console_lines(body) if lang in ("console", "terminal", "shell-session") else body, line)))
         elif lang in _PY_FENCES:
             out.append((m.start(), ("python", body, line)))
+        elif lang in _JS_FENCES:
+            out.append((m.start(), ("js", body, line)))
         elif lang in ("dockerfile", "docker"):
             out.extend((m.start(), s) for s in _dockerfile(body, line))
     pos, line_no = 0, 1

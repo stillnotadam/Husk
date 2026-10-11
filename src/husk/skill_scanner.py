@@ -3642,7 +3642,7 @@ def _engine_findings(text, ext):
 # cannot change (the gate blocks on the highest severity present). Indicator
 # findings that add information - bare IP, plain HTTP, tunnel or testbed
 # hosts - are always kept. Measured on the benchmark sets before 1.6.0:
-# 2,200+ duplicate findings, no verdict changes.
+# 1,696 duplicate findings, no verdict changes.
 _ENGINE_SUBSUMES = (
     "Pipes a downloaded script directly into a shell",
     "Decodes base64 - common way to hide a payload",
@@ -3886,7 +3886,7 @@ def _scan_text(text, ext):
     findings.extend(find_role_hijack(text))
     findings.extend(find_download_then_execute(text))
     findings.extend(find_remote_code_execution(text))
-    # The analysis engine (husk/engine): dataflow through shell and Python,
+    # The analysis engine (husk/engine): dataflow through shell, Python and JS,
     # rules from engine/rules/*.yml, each finding with its evidence chain.
     findings.extend(_engine_findings(text, ext))
     findings.extend(find_shell_startup_persistence(text))
