@@ -416,14 +416,30 @@ def test_unshare_verification_returns_false_cleanly_when_binary_missing(monkeypa
 
 
 def test_apply_resource_limits_sets_real_limits_without_crashing():
-    """Runs in-process (not via preexec_fn, which coverage can't trace
-    into a subprocess) to verify the function itself is correct: real
-    limits actually get set to the real configured values."""
-    _apply_resource_limits(memory_limit_mb=128)
-    cpu_soft, _ = resource_module.getrlimit(resource_module.RLIMIT_CPU)
-    mem_soft, _ = resource_module.getrlimit(resource_module.RLIMIT_AS)
-    assert cpu_soft == 5
-    assert mem_soft == 128 * 1024 * 1024
+    """Calls the function directly (not via preexec_fn) to verify real
+    limits get set to the configured values - but in a forked child.
+    Running it in the pytest process itself capped the rest of the test
+    run at 5 CPU-seconds and 128 MB, and blocked later sandbox runs from
+    setting their own (higher) process limit."""
+    read_fd, write_fd = os.pipe()
+    pid = os.fork()
+    if pid == 0:  # child
+        os.close(read_fd)
+        try:
+            _apply_resource_limits(memory_limit_mb=128, nproc_limit=4096)
+            got = (
+                resource_module.getrlimit(resource_module.RLIMIT_CPU)[0],
+                resource_module.getrlimit(resource_module.RLIMIT_AS)[0],
+                resource_module.getrlimit(resource_module.RLIMIT_NPROC)[0],
+            )
+            os.write(write_fd, repr(got).encode())
+        finally:
+            os._exit(0)
+    os.close(write_fd)
+    with os.fdopen(read_fd) as r:
+        data = r.read()
+    os.waitpid(pid, 0)
+    assert data == repr((5, 128 * 1024 * 1024, 4096))
 
 
 def test_snapshot_dir_skips_a_file_that_disappears_during_scan():
@@ -456,3 +472,34 @@ def test_snapshot_dir_skips_a_file_that_disappears_during_scan():
 
         assert "real.txt" in snapshot
         assert "vanished.txt" not in snapshot  # skipped cleanly, not raised
+
+
+def test_fork_bomb_is_capped_relative_to_existing_tasks():
+    """RLIMIT_NPROC counts every task the user owns, so the sandbox sets it
+    to (current tasks + MAX_PROCESSES). A script forking in a loop must
+    still be stopped after roughly MAX_PROCESSES new tasks."""
+    from husk.sandbox import MAX_PROCESSES
+    with tempfile.NamedTemporaryFile(suffix=".py", mode="w", delete=False) as f:
+        f.write(
+            "import os, time\n"
+            "made = 0\n"
+            "for _ in range(500):\n"
+            "    try:\n"
+            "        pid = os.fork()\n"
+            "    except OSError:\n"
+            "        break\n"
+            "    if pid == 0:\n"
+            "        time.sleep(2)\n"
+            "        os._exit(0)\n"
+            "    made += 1\n"
+            "print('forked', made)\n"
+        )
+        script_path = f.name
+    try:
+        result = sandbox_run_script(script_path, timeout=8)
+        assert result["executed"] is True, result["findings"]
+        made = int(result["stdout"].split()[-1])
+        # Other processes the user starts meanwhile can only lower this.
+        assert made <= MAX_PROCESSES
+    finally:
+        os.unlink(script_path)

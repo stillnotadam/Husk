@@ -64,6 +64,7 @@ safe" - a clean run only means nothing bad happened this time, under
 these inputs.
 """
 
+import contextlib
 import os
 
 try:
@@ -75,6 +76,7 @@ try:
 except ImportError:  # Windows
     resource = None  # type: ignore[assignment]
 import shutil
+import signal
 import subprocess
 import sys
 import tempfile
@@ -107,7 +109,13 @@ SYSTEM_DIRS_TO_BIND = [d for d in _CANDIDATE_SYSTEM_DIRS if os.path.isdir(d)]
 # large download, long-running loop) will hit a limit and stop.
 CPU_TIME_LIMIT_SECONDS = 5
 MEMORY_LIMIT_MB = 256
-MAX_PROCESSES = 10
+# How many processes/threads the sandboxed script may ADD. RLIMIT_NPROC is
+# checked against every task the user owns, not just the sandboxed child,
+# so it is set to the user's current task count plus this headroom. A flat
+# limit of 10 broke on any busy machine and killed Go binaries outright
+# (the Go runtime starts several OS threads before main() runs). WSL and
+# containers can also count tasks /proc can't see, hence the wide margin.
+MAX_PROCESSES = 64
 WALL_CLOCK_TIMEOUT_SECONDS = 8
 
 
@@ -117,7 +125,26 @@ WALL_CLOCK_TIMEOUT_SECONDS = 8
 SANDBOX_SUPPORTED = sys.platform.startswith("linux") and resource is not None
 
 
-def _apply_resource_limits(memory_limit_mb=MEMORY_LIMIT_MB):
+def _user_task_count():
+    """Processes + threads currently owned by this user (what RLIMIT_NPROC
+    counts). Best effort: 0 if /proc can't be read."""
+    uid = os.getuid()
+    total = 0
+    try:
+        pids = [p for p in os.listdir("/proc") if p.isdigit()]
+    except OSError:
+        return 0
+    for pid in pids:
+        try:
+            if os.stat(f"/proc/{pid}").st_uid != uid:
+                continue
+            total += len(os.listdir(f"/proc/{pid}/task"))
+        except OSError:
+            continue  # process exited mid-scan
+    return total
+
+
+def _apply_resource_limits(memory_limit_mb=MEMORY_LIMIT_MB, nproc_limit=MAX_PROCESSES):
     """
     Runs in the child process (via subprocess's preexec_fn) before the
     sandboxed script starts. Sets hard limits so a runaway or malicious
@@ -133,11 +160,14 @@ def _apply_resource_limits(memory_limit_mb=MEMORY_LIMIT_MB):
     against truly unbounded allocation, not the primary memory control
     for Node specifically - that's --max-old-space-size in
     LANGUAGE_INTERPRETERS, which caps real heap usage.
+
+    nproc_limit is computed in the parent (see _user_task_count) - this
+    function runs between fork and exec, where scanning /proc is unwise.
     """
     resource.setrlimit(resource.RLIMIT_CPU, (CPU_TIME_LIMIT_SECONDS, CPU_TIME_LIMIT_SECONDS))
     mem_bytes = memory_limit_mb * 1024 * 1024
     resource.setrlimit(resource.RLIMIT_AS, (mem_bytes, mem_bytes))
-    resource.setrlimit(resource.RLIMIT_NPROC, (MAX_PROCESSES, MAX_PROCESSES))
+    resource.setrlimit(resource.RLIMIT_NPROC, (nproc_limit, nproc_limit))
 
 
 def _snapshot_dir(path):
@@ -308,6 +338,13 @@ COMPILERS = {
     ".rs": ["rustc", "-O"],
     ".go": ["go", "build", "-o"],
 }
+
+
+def _kill_group(proc):
+    """SIGKILL the sandboxed script's whole process group (it runs in its
+    own session). Safe to call after it has exited."""
+    with contextlib.suppress(ProcessLookupError, PermissionError):
+        os.killpg(proc.pid, signal.SIGKILL)
 
 
 def _compile_if_needed(script_abs_path, workdir):
@@ -588,24 +625,36 @@ def _sandbox_run(script_path, timeout=WALL_CLOCK_TIMEOUT_SECONDS):
             # the higher ceiling; Python and shell/Ruby keep the tight
             # one.
             as_limit_mb = 4096 if ext_for_compile == ".go" or ext == ".js" else MEMORY_LIMIT_MB
-            proc = subprocess.run(  # noqa: S603 - this IS the sandbox: running untrusted skill code is the module's entire purpose, under the isolation/resource-limits built up throughout this file
+            nproc_limit = _user_task_count() + MAX_PROCESSES
+            # Own session, so everything the script forks can be killed as
+            # one process group - otherwise children outlive the scan and
+            # hold the output pipes open.
+            proc = subprocess.Popen(  # noqa: S603 - this IS the sandbox: running untrusted skill code is the module's entire purpose, under the isolation/resource-limits built up throughout this file
                 command,
                 cwd=workdir,
                 env=restricted_env,
-                capture_output=True,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
                 text=True,
-                timeout=timeout,
-                preexec_fn=lambda: _apply_resource_limits(as_limit_mb),
-                check=False,
+                errors="replace",
+                start_new_session=True,
+                preexec_fn=lambda: _apply_resource_limits(as_limit_mb, nproc_limit),  # noqa: PLW1509 - only setrlimit calls, no locks; the CLI doesn't run scans on threads
             )
+            try:
+                out, err = proc.communicate(timeout=timeout)
+            except subprocess.TimeoutExpired:
+                _kill_group(proc)
+                out, err = proc.communicate()
+                result["executed"] = True
+                result["timed_out"] = True
+                result["stdout"] = (out or "")[:2000]
+                raise
+            _kill_group(proc)  # reap anything the script left running
             result["executed"] = True
             result["exit_code"] = proc.returncode
-            result["stdout"] = proc.stdout[:2000]
-            result["stderr"] = proc.stderr[:2000]
-        except subprocess.TimeoutExpired as e:
-            result["executed"] = True
-            result["timed_out"] = True
-            result["stdout"] = (e.stdout or "")[:2000] if isinstance(e.stdout, str) else ""
+            result["stdout"] = out[:2000]
+            result["stderr"] = err[:2000]
+        except subprocess.TimeoutExpired:
             result["findings"].append(
                 f"Script did not finish within {timeout}s and was terminated - "
                 f"could indicate an intentional long-running/hanging pattern, "
