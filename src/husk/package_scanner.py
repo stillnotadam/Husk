@@ -37,6 +37,7 @@ except ImportError:  # pragma: no cover - zlib is always present in CPython
 
 # Import the module-1 and module-2 checks so archive contents get the
 # full treatment, not a separate weaker pass.
+from .gate import INFO_TAG
 from .skill_scanner import scan_skill_file
 
 # Magic bytes for common archive formats, independent of file extension.
@@ -253,8 +254,12 @@ def _scan_one(full_path, rel_path, name, depth, findings, _budget):
     # module 1 + 2 checks rather than a separate weaker pass.
     result = scan_skill_file(full_path, kind=kind)
     if result["verdict"] == "FLAGGED":
-        for f in result["findings"]:
-            findings.append(f"'{rel_path}': {f}")
+        info = result.get("info") or [False] * len(result["findings"])
+        for f, is_info in zip(result["findings"], info):
+            # An info-only finding stays info-only when the file also has hard
+            # ones; before 1.6.0 the gate re-read it from its text and could
+            # block on it (a trusted installer's curl | bash, scored high).
+            findings.append(f"'{rel_path}': {INFO_TAG}{f}" if is_info else f"'{rel_path}': {f}")
     elif result["verdict"] == "ERROR":
         findings.append(f"'{rel_path}' could not be read: {result['findings'][0]}")
 

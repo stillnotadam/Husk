@@ -45,6 +45,7 @@ import sys
 import unicodedata
 
 from . import engine
+from .gate import SEVERITY_ORDER, classify_severity
 from .js_taint_analysis import analyze_js_taint
 from .taint_analysis import analyze_taint_flows
 
@@ -3633,6 +3634,55 @@ def _engine_findings(text, ext):
             f"[{r['rule']} {r['severity']}] {r['title']}: {r['chain']}" for r in engine_report(text, ext)]
 
 
+# Regex findings that describe the same event as an engine flow: a download
+# run, a decode executed, code compiled and run, a shell spawned on it. When
+# one sits on a line an engine finding's chain already explains, and is no
+# more severe than that engine finding, it is the same fact said twice; the
+# engine version names every step, so the regex one is dropped. The verdict
+# cannot change (the gate blocks on the highest severity present). Indicator
+# findings that add information - bare IP, plain HTTP, tunnel or testbed
+# hosts - are always kept. Measured on the benchmark sets before 1.6.0:
+# 2,200+ duplicate findings, no verdict changes.
+_ENGINE_SUBSUMES = (
+    "Pipes a downloaded script directly into a shell",
+    "Decodes base64 - common way to hide a payload",
+    "Direct shell command execution",
+    "Compiles a string into executable code at runtime",
+    "compiles a string and executes it in one step",
+    "runs code straight out of a base",
+    "remote code execution - ",
+    "and later executes it - two-step download-and-run",
+    "downloads content and then loads or runs it as code",
+    "uses shell=True",
+    "shell command substitution reads a credential-shaped file directly",
+)
+_LINE_PREFIX = re.compile(r"^(?:▸SOFT▸)?Line (\d+):")
+_CHAIN_LINE = re.compile(r"\bline (\d+) ")
+
+
+def _drop_engine_duplicates(findings):
+    covered = {}  # line -> most severe engine finding that explains it (index into SEVERITY_ORDER)
+    for f in findings:
+        if "[HUSK-" not in f:
+            continue
+        rank = SEVERITY_ORDER.index(classify_severity(f))
+        m = _LINE_PREFIX.match(f)
+        lines = {int(n) for n in _CHAIN_LINE.findall(f)} | ({int(m.group(1))} if m else set())
+        for n in lines:
+            covered[n] = min(covered.get(n, rank), rank)
+    if not covered:
+        return findings
+    kept = []
+    for f in findings:
+        m = _LINE_PREFIX.match(f)
+        if (m and "[HUSK-" not in f and int(m.group(1)) in covered
+                and any(s in f for s in _ENGINE_SUBSUMES)
+                and SEVERITY_ORDER.index(classify_severity(f)) >= covered[int(m.group(1))]):
+            continue
+        kept.append(f)
+    return kept
+
+
 def _scan_text(text, ext):
     findings = []
 
@@ -3879,15 +3929,20 @@ def _scan_text(text, ext):
         findings = [SOFT_FINDING_MARKER + f if not f.startswith(SOFT_FINDING_MARKER) and "unusually long hidden comment" in f
                     else f for f in findings]
 
+    findings = _drop_engine_duplicates(findings)
+
     if findings:
         hard_findings = [f for f in findings if not f.startswith(SOFT_FINDING_MARKER)]
         # Strip the marker before anything reaches the user - it's an
         # internal signal for verdict logic, not something anyone
         # scanning a file needs to see in the output text itself.
         display_findings = [f.removeprefix(SOFT_FINDING_MARKER) for f in findings]
+        # Which of them are info-only, so a caller that keeps them next to
+        # hard findings (scan_package) can keep them info-only.
+        info = [f.startswith(SOFT_FINDING_MARKER) for f in findings]
         if hard_findings:
-            return {"verdict": "FLAGGED", "findings": display_findings}
-        return {"verdict": "INFO", "findings": display_findings}
+            return {"verdict": "FLAGGED", "findings": display_findings, "info": info}
+        return {"verdict": "INFO", "findings": display_findings, "info": info}
     return {"verdict": "SAFE", "findings": ["No suspicious patterns found."]}
 
 

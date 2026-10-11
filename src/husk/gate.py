@@ -115,6 +115,11 @@ _SEVERITY_RULES = [
 ]
 
 _SOFT_MARKER = "\u25b8SOFT\u25b8"
+# scan_package's visible form of an info-only finding: "'path': (info) Line 3: ...".
+# An engine finding carries its severity in its tag: "[HUSK-RCE-001 info]".
+INFO_TAG = "(info) "
+_INFO_TAGGED = re.compile(r"^'[^'\n]*'(?: \([^)\n]*\))?: \(info\) |^(?:Line \d+: )?\[HUSK-[A-Z0-9-]+ info\]"
+                          r"|^'[^'\n]*'(?: \([^)\n]*\))?: Line \d+: \[HUSK-[A-Z0-9-]+ info\]")
 
 
 def classify_severity(finding):
@@ -125,7 +130,7 @@ def classify_severity(finding):
     a reassembled blob) and inherit 'info' so they never independently
     escalate the gate.
     """
-    if finding.startswith(_SOFT_MARKER):
+    if finding.startswith(_SOFT_MARKER) or _INFO_TAGGED.match(finding):
         return "info"
     if finding.lstrip().startswith("->"):
         return "info"
