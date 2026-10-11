@@ -109,7 +109,7 @@ def _build(d, source, start, lines):
                 d.get("trusted_installers", ""), d.get("explain", ""), f"{source}:{start}")
 
 
-_cache = {}
+_cache: dict = {}  # (core path, *extra paths) -> rules
 
 
 def load_rules(paths=None):
