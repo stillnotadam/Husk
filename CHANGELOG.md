@@ -4,7 +4,7 @@ All notable changes to Husk are documented here. Format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.0.0/); versioning
 follows [Semantic Versioning](https://semver.org/).
 
-## [Unreleased]
+## [1.5.0] - 2026-10-11
 
 ### Added
 - **Analysis engine** ([docs/ENGINE.md](docs/ENGINE.md)). A second detection layer that

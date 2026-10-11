@@ -5,6 +5,36 @@ testing sessions - this section is the current, accurate headline,
 everything below is the full supporting record (methodology, every
 competitor comparison, every bug found and fixed along the way).
 
+# 2026-10 (1.5.0): the analysis engine
+
+1.5.0 adds a dataflow engine next to the pattern checks ([docs/ENGINE.md](docs/ENGINE.md)).
+Same datasets and method as below (`dataset_bench.py`, default gate, no LLM).
+
+| Dataset | Skills | Strict, 1.4.1 | Strict, 1.5.0 | Loose, 1.4.1 | Loose, 1.5.0 |
+|---|---:|---:|---:|---:|---:|
+| MalSkillBench malicious | 3,944 | 45.5% | **48.2%** | 67.5% | **68.3%** |
+| SkillTrustBench malicious | 2,863 | 50.7% | **59.9%** | 90.7% | **91.2%** |
+| SkillTrustBench suspicious | 1,014 | 2.2% | 2.3% | 38.6% | 38.6% |
+| MalSkillBench benign (false alarms) | 4,000 | 2.8% | 2.8% | 4.6% | 4.6% |
+| SkillTrustBench normal (false alarms) | 1,643 | 1.7% | 1.7% | 6.3% | 6.4% |
+
+On the 549-skill head-to-head sample (any finding counts, as in the competitor tables):
+malware flagged 108 -> 110 of 150, hand-checked legitimate still 248 of 249 clean,
+research benign unchanged at 140 of 150.
+
+- **371 more malicious skills block (108 MalSkillBench, 263 SkillTrustBench), 1 stops
+  blocking.** That one was caught only by its official nvm install line, now on the
+  trusted list; neither version detects its actual payload.
+- **Benign: 9 skills stop failing, 7 start** (MalSkillBench 8 and 6, SkillTrustBench
+  normal 1 and 1). The new ones run a project's own install script from GitHub or a
+  vendor site, the class the pattern rule already blocks for `curl | bash`.
+- **The engine on its own** (six rules) blocks 17.1% of MalSkillBench and 22.0% of
+  SkillTrustBench malware, at 0.6% / 0.1% false alarms and none on the hand-checked set.
+- Three ideas were measured and dropped before release: downgrading GitHub-hosted
+  installers (-36 malware, +12 benign), treating `example.com` fetches as documentation
+  (-75 malware, +0 benign) and grading harmless-looking decoded payloads as medium
+  (-64 malware, +2 benign). Details in docs/ENGINE.md.
+
 # 2026-10 (1.4.1): remote-execution rule, and the head-to-head refreshed
 
 ## The new rule, on every dataset
