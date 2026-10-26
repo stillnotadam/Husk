@@ -10,3 +10,9 @@ htmlcov/
 .venv/
 venv/
 .env
+
+# Sibling repos kept in this folder for convenience. Separate git repos;
+# husk-backend-website is PRIVATE and must never be committed here.
+/husk-website/
+/husk-backend-website/
+*.bundle
