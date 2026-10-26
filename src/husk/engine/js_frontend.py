@@ -29,7 +29,7 @@ modern-syntax rewrites below, yields nothing.
 import re
 from types import SimpleNamespace
 
-from .model import EMPTY, Flow, Step, Value, union
+from .model import EMPTY, Flow, Step, Value, module_returns, shared_files, union
 from .shell import CRED_PATH, MAX_DEPTH, PERSIST_PATH, _decode_text, _short, analyze_shell, hosts_in
 
 try:
@@ -164,7 +164,7 @@ class _Analyzer:
         self.objects = {}     # local name -> its object-literal node (request options)
         self.handles = {}     # local name -> what it sends over ("an http request")
         self.streams = {}     # local name -> path of the fs write stream it holds
-        self.files = {}
+        self.files = shared_files(ctx)
         self.returns = {}
         self.scopes = [{}]    # per function: name -> value it shadowed (_MISSING if none)
         self.ret_stack = []
@@ -569,6 +569,13 @@ class _Analyzer:
             return self.returns[short] | everything.as_text(None)
         if _is(node.callee, "ArrowFunctionExpression", "FunctionExpression"):
             return self.function(node.callee, everything)  # an IIFE
+        if name.startswith(".") and "." in name[1:].lstrip("./"):
+            # require("./lib").load() / import { load } from "./lib.js": another file of the package
+            spec, attr = name.rsplit(".", 1)
+            stem = spec.rsplit("/", 1)[-1].split(".", 1)[0]
+            v = module_returns(self.ctx, "js", stem).get(attr)
+            if v is not None:
+                return v | everything.as_text(None)
         if not _is(node.callee, "MemberExpression"):
             self.val(node.callee)
         result = (receiver | everything).as_text(None)
@@ -756,7 +763,7 @@ def _run(tree, ctx, base_line, offset, depth, *, flatten=False):  # noqa: PLR091
         if a.returns:
             # Second pass: call sites earlier in the file see what functions return.
             del ctx.flows[start:]
-            a.env, a.files, a.objects, a.handles, a.streams = {}, {}, {}, {}, {}
+            a.env, a.objects, a.handles, a.streams = {}, {}, {}, {}
             for s in tree.body:
                 a.visit(s)
     except RecursionError:

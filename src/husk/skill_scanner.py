@@ -3629,6 +3629,61 @@ def engine_report(text, ext):
         _SCANNING_PROSE.reset(token)
 
 
+_PACKAGE_ENGINE_EXTS = (engine.extract.SHELL_EXTS | engine.extract.PYTHON_EXTS | engine.extract.JS_EXTS
+                        | (engine.extract.PROSE_EXTS - {""}) | {".json"})
+
+
+def package_engine_findings(root):
+    """Engine findings whose evidence spans files of one package: a download
+    saved by one script and run by another file, a function in helpers.py
+    that fetches code main.py executes. Reported against the file holding the
+    sink, in scan_package's "'file': ..." form."""
+    items, texts = [], {}
+    for dirpath, dirs, filenames in os.walk(root):
+        dirs[:] = sorted(d for d in dirs if d not in (".git", "node_modules", "__pycache__"))
+        for name in sorted(filenames):
+            full = os.path.join(dirpath, name)
+            ext = os.path.splitext(name)[1].lower()
+            try:
+                if os.path.islink(full) or os.path.getsize(full) > 1_000_000:
+                    continue
+                with open(full, "rb") as fh:
+                    raw = fh.read()
+            except OSError:
+                continue
+            if ext not in _PACKAGE_ENGINE_EXTS and not raw.startswith(b"#!"):
+                continue
+            text = decode_text(raw)
+            shebang = text.startswith("#!") and bool(re.search(r"\b(?:ba|z|da|k)?sh\b", text.split("\n", 1)[0]))
+            if ext not in _PACKAGE_ENGINE_EXTS and not shebang:
+                continue
+            rel = os.path.relpath(full, root).replace(os.sep, "/")
+            items.append((rel, text, ext, shebang))
+            texts[rel] = (text, ext)
+    if len(items) < 2:
+        return []
+    try:
+        out = engine.analyze_package(items)
+    except RecursionError:
+        return []
+    findings = []
+    token = _SCANNING_PROSE.set(True)
+    try:
+        for r in out:
+            text, ext = texts.get(r["file"], ("", ""))
+            if ext in PROSE_EXTENSIONS:
+                starts = [0] + [m.end() for m in re.finditer("\n", text)]
+                n = r["line"] - 1
+                line_end = starts[n + 1] - 1 if 0 <= n < len(starts) - 1 else len(text)
+                if 0 <= n < len(starts) and _is_negated(text, line_end):
+                    continue
+            tag = "(info) " if r["severity"] == "info" else ""
+            findings.append(f"'{r['file']}': {tag}Line {r['line']}: [{r['rule']} {r['severity']}] {r['title']}: {r['chain']}")
+    finally:
+        _SCANNING_PROSE.reset(token)
+    return findings
+
+
 def _engine_findings(text, ext):
     return [f"{SOFT_FINDING_MARKER if r['severity'] == 'info' else ''}Line {r['line']}: "
             f"[{r['rule']} {r['severity']}] {r['title']}: {r['chain']}" for r in engine_report(text, ext)]

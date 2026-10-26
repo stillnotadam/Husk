@@ -4,6 +4,38 @@ All notable changes to Husk are documented here. Format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.0.0/); versioning
 follows [Semantic Versioning](https://semver.org/).
 
+## [Unreleased]
+
+### Added
+- **Cross-file flows.** `scan_package` runs a package-level engine pass that connects
+  files: a download saved by one script and run from `SKILL.md` or another script, a
+  function in `helpers.py` / `lib.js` returning fetched code that `main.py` / `index.js`
+  executes (Python `from x import f`, `import pkg.mod`; JavaScript `require("./x")`,
+  `import { f } from "./x.mjs"`). Only flows whose evidence spans files are reported there,
+  against the file holding the sink, with each step naming its file
+  (`scripts/setup.sh line 1 fetches ... -> SKILL.md line 6 runs ...`). `husk explain --json`
+  steps carry a `file` field when known.
+- **One file table for every front end.** Within a single file, a Python or JavaScript
+  download is now connected to the shell command that same code runs (`urlretrieve(u, p)`
+  then `subprocess.run(f"chmod +x {p} && {p}", shell=True)`). Paths are normalised, so
+  `$HOME/x`, `${HOME}/x` and `~/x` are one file.
+
+### Changed
+- Sourcing or running a file written as mostly fixed text with a fetched value in it (a
+  config heredoc of `KEY="$value"` lines) is now injection (medium), not remote code
+  execution, the same rule inline code already followed. A heredoc line that is only a
+  substitution still counts as code, and fixed text appended separately cannot pad a
+  payload into the lower grade.
+- pytest only collects `tests/`.
+
+### Benchmarks
+- 1.6.0 -> unreleased: MalSkillBench malicious blocked 1,902 -> 1,920 (48.2% -> 48.7%),
+  SkillTrustBench malicious 1,714 -> 1,755 (59.9% -> 61.3%). Of the 59, 52 come from the
+  shared file table inside single files and 7 from cross-file flows. False alarms: one
+  more MalSkillBench benign skill (111), which downloads new copies of its own scripts
+  from GitHub and runs them; SkillTrustBench normal unchanged; hand-checked legitimate
+  still 0 of 248.
+
 ## [1.6.0] - 2026-10-11
 
 ### Added

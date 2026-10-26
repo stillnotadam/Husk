@@ -14,20 +14,74 @@ Sinks say what happens to it:
   send     sent over the network
   persist  written to a shell startup file, cron, launchd, systemd, ...
 """
+import contextvars
+import posixpath
 from dataclasses import dataclass, field
 from typing import Optional
 
 LABELS = ("remote", "secret", "decoded")
 SINKS = ("exec", "inject", "send", "persist")
 
+# The file being analysed, when a whole package is (engine.analyze_package).
+# Steps record it, so a chain can say which file each step is in.
+CURRENT_FILE: contextvars.ContextVar = contextvars.ContextVar("husk_engine_file", default="")
+
 
 @dataclass(frozen=True)
 class Step:
     line: int
     text: str
+    file: str = field(default_factory=CURRENT_FILE.get)
 
     def __str__(self):
-        return f"line {self.line} {self.text}"
+        return f"{self.file} line {self.line} {self.text}" if self.file else f"line {self.line} {self.text}"
+
+
+def norm_path(path):
+    """One spelling per path, so a file written as "$HOME/.cache/x" by one
+    script and run as "~/.cache/x" by another is the same file."""
+    if not path:
+        return path
+    for home in ("${HOME}", "$HOME"):
+        if path == home or path.startswith(home + "/"):
+            path = "~" + path[len(home):]
+    norm = posixpath.normpath(path)
+    return norm[2:] if norm.startswith("./") else norm
+
+
+def shared_files(ctx):
+    """The file table front ends share: the context's, or a private one."""
+    files = getattr(ctx, "files", None)
+    return files if files is not None else Files()
+
+
+def module_returns(ctx, kind, module):
+    """What functions of another module of the package return (name -> Value)."""
+    table = getattr(ctx, "module_returns", None)
+    return table.get((kind, module), {}) if table else {}
+
+
+class Files(dict):
+    """Files written so far (path -> Value), keyed by normalised path. One
+    instance is shared by every front end analysing a file, or a package.
+    `literal` remembers how much fixed text a file was written with (a
+    heredoc config with one fetched value in it is not a downloaded script)."""
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.literal = {}
+
+    def __getitem__(self, k):
+        return super().__getitem__(norm_path(k))
+
+    def __setitem__(self, k, v):
+        super().__setitem__(norm_path(k), v)
+
+    def __contains__(self, k):
+        return super().__contains__(norm_path(k))
+
+    def get(self, k, default=None):
+        return super().get(norm_path(k), default)
 
 
 @dataclass(frozen=True)

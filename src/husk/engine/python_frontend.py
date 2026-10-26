@@ -16,7 +16,7 @@ which are narrow (code execution, not "any subprocess").
 import ast
 import re
 
-from .model import EMPTY, Flow, Step, Value, union
+from .model import EMPTY, Flow, Step, Value, module_returns, shared_files, union
 from .shell import CRED_PATH, MAX_DEPTH, PERSIST_PATH, _decode_text, _short, analyze_shell, hosts_in
 
 _FETCH = re.compile(r"(?:^|\.)(?:urlopen|urlretrieve|get|request)$")
@@ -53,7 +53,8 @@ class _Analyzer:
         self.base = base_line - 1
         self.depth = depth
         self.env = {}
-        self.files = {}
+        self.files = shared_files(ctx)
+        self.imports = {}  # local name -> (module, attribute or None)
         self.file_handles = {}
         self.returns = {}
         self.clients = set()
@@ -237,10 +238,28 @@ class _Analyzer:
             return Value(text="~")
         if short in self.returns and isinstance(node.func, ast.Name):
             return self.returns[short] | everything.as_text(None)
+        imported = self.imported(node.func)
+        if imported is not None:
+            return imported | everything.as_text(None)
         # anything else: the result is derived from its inputs (method calls
         # on a fetched response included: r.read(), r.json(), r.text)
         receiver = self.val(node.func.value) if isinstance(node.func, ast.Attribute) else EMPTY
         return (receiver | everything).as_text(None)
+
+    def imported(self, func):
+        """A function imported from another module of the package that
+        returns labelled data: from helpers import load / helpers.load()."""
+        if isinstance(func, ast.Name) and func.id in self.imports:
+            module, attr = self.imports[func.id]
+        elif isinstance(func, ast.Attribute) and isinstance(func.value, ast.Name) and func.value.id in self.imports:
+            # import helpers / from lib import net: the name is a module; net.pull()
+            pkg, sub = self.imports[func.value.id]
+            module, attr = sub or pkg, func.attr
+        else:
+            return None
+        if attr is None:
+            return None
+        return module_returns(self.ctx, "py", module.rsplit(".", 1)[-1]).get(attr)
 
     def _is_fetch(self, name, node):
         if not _FETCH.search(name) and not name.endswith(("post", "put", "patch")):
@@ -249,7 +268,8 @@ class _Analyzer:
         if name in ("urlopen", "urlretrieve") or root in _FETCH_MODULES:
             return True
         # session.get(...) / client.post(...) on a requests/httpx/aiohttp client
-        return isinstance(node.func, ast.Attribute) and isinstance(node.func.value, ast.Name)             and node.func.value.id in self.clients
+        return isinstance(node.func, ast.Attribute) and isinstance(node.func.value, ast.Name) \
+            and node.func.value.id in self.clients
 
     def subprocess(self, node, name, args, kwargs):
         shell = any(k.arg == "shell" and isinstance(k.value, ast.Constant) and k.value.value for k in node.keywords)
@@ -309,7 +329,8 @@ class _Analyzer:
     # -- statements --------------------------------------------------------------
 
     def note_client(self, target, value_node):
-        if isinstance(target, ast.Name) and isinstance(value_node, ast.Call)                 and _CLIENT_FACTORIES.search(dotted(value_node.func)):
+        if isinstance(target, ast.Name) and isinstance(value_node, ast.Call) \
+                and _CLIENT_FACTORIES.search(dotted(value_node.func)):
             self.clients.add(target.id)
 
     def assign(self, target, value):
@@ -374,6 +395,15 @@ class _Analyzer:
             if ret.labels:
                 self.returns[s.name] = ret.as_text(None)
             self.env = {**saved, **{k: v for k, v in self.env.items() if k not in saved and k.isupper()}}
+        elif isinstance(s, ast.Import):
+            for al in s.names:
+                self.imports[al.asname or al.name.split(".")[0]] = (al.name if al.asname else al.name.split(".")[0], None)
+        elif isinstance(s, ast.ImportFrom):
+            for al in s.names:
+                if s.module:
+                    self.imports[al.asname or al.name] = (s.module, al.name)
+                else:  # from . import helpers
+                    self.imports[al.asname or al.name] = (al.name, None)
         elif isinstance(s, ast.ClassDef):
             self.block(s.body)
         elif isinstance(s, (ast.Expr, ast.Return)):
@@ -398,7 +428,7 @@ def analyze_python(src, ctx, base_line=1, depth=0, *, tree=None, flatten_lines=F
         a.block(tree.body)
         if a.returns:
             del ctx.flows[start:]
-            a.env, a.files, a.file_handles = {}, {}, {}
+            a.env, a.file_handles = {}, {}
             a.block(tree.body)
     except RecursionError:
         return a

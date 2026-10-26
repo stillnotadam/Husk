@@ -38,7 +38,7 @@ except ImportError:  # pragma: no cover - zlib is always present in CPython
 # Import the module-1 and module-2 checks so archive contents get the
 # full treatment, not a separate weaker pass.
 from .gate import INFO_TAG
-from .skill_scanner import scan_skill_file
+from .skill_scanner import package_engine_findings, scan_skill_file
 
 # Magic bytes for common archive formats, independent of file extension.
 ARCHIVE_SIGNATURES = {
@@ -381,6 +381,13 @@ def scan_package(root_path, depth=0, findings=None, _budget=None, max_archive_by
                     f"'{rel_path}' could not be inspected ({type(exc).__name__}: {str(exc)[:120]}) - "
                     f"its contents were not scanned. Files built to crash scanners are a known evasion."
                 )
+
+    # Flows that span files (a download saved by one script and run by
+    # another): the per-file scans above cannot see them.
+    try:
+        findings.extend(package_engine_findings(root_path))
+    except Exception as exc:  # noqa: BLE001 - never lose the per-file findings to this pass
+        findings.append(f"cross-file analysis could not complete ({type(exc).__name__}) - per-file findings are complete.")
 
     # dedupe identical findings (a rule can match the same line twice)
     seen_findings = set()

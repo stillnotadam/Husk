@@ -18,7 +18,7 @@ import re
 from dataclasses import dataclass, field
 from typing import Optional
 
-from .model import EMPTY, Flow, Step, Value, union
+from .model import EMPTY, Flow, Step, Value, norm_path, shared_files, union
 
 MAX_SCRIPT_CHARS = 200_000
 MAX_DEPTH = 3
@@ -323,6 +323,8 @@ _ASSIGN_BUILTINS = {"export", "local", "declare", "readonly", "typeset"}
 
 _DATA_FILE = re.compile(r"\.(?:png|jpe?g|gif|webp|svg|bmp|ico|mp[34]|wav|ogg|webm|mov|pdf|json|csv|txt|md|html?|xml|ya?ml|log)$", re.IGNORECASE)
 _URL_RE = re.compile(r"(?i)\b(?:https?|ftp)://[^\s'\"<>|;)]+")
+# A heredoc line that is nothing but a substitution: the substituted text is the code.
+_BARE_SUBST_LINE = re.compile(r"(?m)^[ \t]*(?:\$\{?\w+\}?|\$\(.*\)|`[^`]*`)[ \t]*$")
 _ASSIGN_RE = re.compile(r"^([A-Za-z_][A-Za-z0-9_]*)\+?=")
 
 CRED_PATH = re.compile(
@@ -391,7 +393,7 @@ class ShellEvaluator:
         self.ctx = ctx
         self.depth = depth
         self.vars = state.vars if state else {}
-        self.files = state.files if state else {}
+        self.files = state.files if state else shared_files(ctx)
         self._fd = 62
 
     # -- values of words -------------------------------------------------------
@@ -476,6 +478,7 @@ class ShellEvaluator:
             self._assign(words.pop(0), m)
             assigned = True
         self._stdin_literal = 0
+        self._out_literal = 0
         stdin = self._apply_input_redirs(cmd, stdin)
         if not words:
             return EMPTY if assigned else stdin
@@ -542,6 +545,8 @@ class ShellEvaluator:
                 stdin = Value(stdin.labels, stdin.trail, stdin.hosts, stdin.text)
                 self._heredoc_line = r.body_line
                 self._stdin_literal = len(r.body.strip()) if r.body_quoted else _literal_len(parse_double_quoted(r.body, 0))
+                if not r.body_quoted and _BARE_SUBST_LINE.search(r.body):
+                    self._stdin_literal = 0  # a line that is only $(curl ...) is code, however much text surrounds it
         return stdin
 
     def _apply_output_redirs(self, cmd, out):
@@ -552,6 +557,15 @@ class ShellEvaluator:
                     self.flow(out, "send", cmd.line, f"sends it to {_short(path)}")
                 elif path not in ("/dev/null", "/dev/stderr", "/dev/stdout"):
                     self._write_file(path, out, cmd.line, append=r.op.endswith(">>"))
+                    lit = getattr(self.files, "literal", None)
+                    if lit is not None:
+                        # Scored by the writes that carry labelled data, so fixed text
+                        # appended separately cannot pad a payload into "injection".
+                        key, this = norm_path(path), getattr(self, "_out_literal", 0)
+                        if out.labels:
+                            lit[key] = min(lit[key], this) if r.op.endswith(">>") and key in lit else this
+                        elif not r.op.endswith(">>"):
+                            lit.pop(key, None)
                 out = EMPTY
         return out
 
@@ -594,13 +608,14 @@ class ShellEvaluator:
             if args:
                 path = self.value(args[0]).text or ""
                 what = "it" if path.startswith("/dev/fd/") else _short(path)
-                self.flow(self.files.get(path, EMPTY), "exec", line, f"runs {what} with {name}")
+                self.flow(self.files.get(path, EMPTY), self._file_sink(path), line, f"runs {what} with {name}")
             return EMPTY
         if name == "eval":
             v = union(self.value(a) for a in args)
             self._run_code(v, _code_sink(sum(_literal_len(a.parts) for a in args)), line, "runs it with eval", "shell", line)
             return EMPTY
         if name in ("echo", "printf"):
+            self._out_literal = sum(_literal_len(a.parts) for a in args)
             vals = [self.value(a) for a in args if not (word_literal(a) or "").startswith("-") or name == "printf"]
             text = " ".join(v.text or "" for v in vals) + "\n"
             return union(vals).as_text(text)
@@ -640,6 +655,7 @@ class ShellEvaluator:
                 self.flow(union(self._read_file(p, line) for p in paths[:-1]), "send", line, f"uploads it with {name}")
             return EMPTY
         if name in _PASSTHROUGH:
+            self._out_literal = self._stdin_literal
             files = [self.value(a).text for a in args if not (word_literal(a) or "-").startswith("-")]
             if name in ("cat", "head", "tail", "tac", "less", "more", "strings") and files:
                 return union(self._read_file(f, line) for f in files) or stdin
@@ -790,10 +806,17 @@ class ShellEvaluator:
             else:
                 v = self.files.get(script, EMPTY)
             what = "it" if script.startswith("/dev/fd/") else _short(script)
-            self.flow(v, "exec", line, f"runs {what} with {name}")
+            self.flow(v, "exec" if "://" in script else self._file_sink(script), line, f"runs {what} with {name}")
         elif reads_stdin:
             self._run_code(stdin, _code_sink(self._stdin_literal), line, f"runs it with {name}", lang,
                            getattr(self, "_heredoc_line", line))
+
+    def _file_sink(self, path):
+        """A file written as mostly fixed text with fetched values in it (a
+        config heredoc) and then sourced is injection, not a downloaded
+        script: the same line _code_sink draws for inline code."""
+        lit = getattr(self.files, "literal", None) or {}
+        return _code_sink(lit.get(norm_path(path), 0))
 
     def _pwsh_encoded(self, v, line):
         try:

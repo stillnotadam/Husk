@@ -93,6 +93,37 @@ with a command (`Run: curl ... | sh`). Blocks in one document share state, so a
 download in one block and its execution three blocks later are connected. It
 also reads `package.json` scripts, Dockerfile `RUN` lines and Makefile recipes.
 
+## Across files
+
+A skill is a package, and an attack can be split across it: `setup.sh`
+downloads to `~/.cache/tool/run.sh` and `SKILL.md` tells the agent to run that
+path, or `helpers.py` fetches code that `main.py` executes. Each file alone
+looks harmless.
+
+Every front end therefore shares one table of the files written so far, keyed
+by normalised path (`$HOME/x`, `${HOME}/x` and `~/x` are one file). Inside one
+file that already connects a Python download to the shell command it then runs.
+Across a package, `analyze_package` runs two rounds over every file: the first
+learns what each file writes and what its functions return (Python `from
+helpers import load`, `import lib.net`; JavaScript `require("./lib")`,
+`import { get } from "./get.mjs"`), the second analyses each file knowing that.
+Only flows whose evidence spans two or more files are reported there, against
+the file holding the sink, so nothing repeats the per-file findings:
+
+```
+'SKILL.md': Line 6: [HUSK-RCE-001 high] downloaded code is executed:
+  scripts/setup.sh line 1 fetches https://cdn.example.dev/p
+  -> scripts/setup.sh line 1 saves it to ~/.cache/tool/run.sh
+  -> SKILL.md line 6 runs ${HOME}/.cache/tool/run.sh with bash
+```
+
+A file written as mostly fixed text with a fetched value in it (a config
+heredoc, `KEY="$value"` lines) and later sourced is an injection risk, not a
+downloaded script: it gets the 20-literal-character rule inline code already
+uses. Padding cannot exploit that: a heredoc line that is nothing but a
+substitution counts as code, and a file is scored by the writes that carried
+the fetched data, not by text appended separately.
+
 ## Rules
 
 Rules are data (`engine/rules/core.yml`), in a strict YAML subset so Husk needs
@@ -129,8 +160,10 @@ is an example, not an instruction.
 
 ## Measured
 
-1.6 adds the JavaScript front end: +2 malicious skills blocked, +0 benign (see
-BENCHMARK.md). The 1.5 numbers below were re-measured with esprima and pypdf
+1.6 adds the JavaScript front end: +2 malicious skills blocked, +0 benign. The
+shared file table and cross-file flows (unreleased) add 59: 52 inside single
+files, 7 across files, for 1 benign skill that downloads new copies of its own
+scripts from GitHub and runs them (see BENCHMARK.md). The 1.5 numbers below were re-measured with esprima and pypdf
 installed and are unchanged.
 
 Benchmarked with `benchmarks/dataset_bench.py`, default gate policy, no LLM.
@@ -171,9 +204,9 @@ Choices that were measured, not assumed:
 
 ## What it does not do yet
 
-- **No flows across files.** A download in `SKILL.md` and its execution in
-  `scripts/run.sh` are not connected unless the path names match inside one
-  file.
+- **Relative paths across files are taken literally.** `out/x` written by
+  `scripts/a.sh` and `scripts/out/x` run from `SKILL.md` are not matched; the
+  engine does not guess each file's working directory.
 - **No branch reasoning.** Both sides of an `if` count, and a value built from a
   labelled value keeps the label. This over-approximates; precision comes from
   the sinks being narrow (code execution, not "any subprocess").
@@ -189,6 +222,5 @@ Choices that were measured, not assumed:
    lose detections. 1.6 merges them into the engine finding instead when both
    fire on the same line; removing them waits for the engine to cover those
    skills too.
-2. Cross-file flows within a package.
-3. More sources and sinks: reverse shells, destructive deletes, agent-config
-   writes (`~/.claude`, `AGENTS.md`), MCP server definitions.
+2. More sinks: destructive deletes, agent-config writes (`~/.claude`,
+   `AGENTS.md`), MCP server definitions.
